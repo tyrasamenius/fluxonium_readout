@@ -22,9 +22,9 @@ class Resonator(Device):
         self.C_r = C_r
         self.E_C_r = 1/(2*C_r) * self.unit_fF_inv_to_GHz
         self.E_L_r = 1/L_r  * self.unit_nH_inv_to_GHz
-        self.freq = 1/np.sqrt(L_r*C_r)/(2*np.pi)
+        self.freq = np.sqrt(8*self.E_C_r*self.E_L_r) 
         self.fock_dim = fock_dim
-        self.n_zpf = np.sqrt(self.hbar*self.C_r/(2*self.L_r))
+        self.n_zpf = 1/2*(self.E_L_r/(2*self.E_C_r))**(1/4)
 
         self.E_C_eff = None
         self.eff_freq = None
@@ -75,7 +75,7 @@ class Fluxonium(Device):
         self.E_C = 1/(2*(C_J+C)) * self.unit_fF_inv_to_GHz
         self.E_L = E_L
         self.resonators = resonators
-        self.E_C_eff = None
+        self.E_C_effs = None
 
     def get_h(self, E_C, phi_e):
         N_phi = self.N_phi
@@ -98,10 +98,18 @@ class Fluxonium(Device):
     def get_h_bare(self, phi_e):
         return self.get_h(self.E_C, phi_e)
     
-    def get_h_eff(self, phi_e):
-        if self.E_C_eff is None:
+    def get_h_effs(self, phi_e):
+
+        if self.E_C_effs is None:
             raise ValueError("E_C_eff not set")
-        return self.get_h(self.E_C_eff, phi_e)
+        
+        H_effs = []
+        for E_C_eff in self.E_C_effs:
+
+            h = self.get_h(E_C_eff, phi_e)
+            H_effs.append(h)
+
+        return H_effs
 
     def get_charge_op(self): ...
 
@@ -143,20 +151,61 @@ class Fluxonium(Device):
         if len(resonators) != len(capacitance_matrices):
             print('Number of resonators and couplings need to match')
             return 
+        
         self.resonators = resonators
         res_couplings = []
+        res_coupling_strengths = []
+
+        fluxonium_E_C_effs = []
+
         for res, cap_mat in zip(resonators, capacitance_matrices):
             inv_cap_mat = np.linalg.inv(cap_mat)
             E_Cr = inv_cap_mat[1,1]/2 * self.unit_fF_inv_to_GHz
             E_C = inv_cap_mat[0,0]/2 * self.unit_fF_inv_to_GHz
-            res.set_E_C_eff(E_Cr)
-            self.set_E_C_eff(E_C)
             g = 2*(inv_cap_mat[0,1] + inv_cap_mat[1,0]) * self.unit_fF_inv_to_GHz
 
+            res.set_E_C_eff(E_Cr)
+            fluxonium_E_C_effs.append(E_C)
             res_couplings.append(g * tensor(self.get_charge_op(), res.get_charge_op()))
-        self.res_couplings = res_couplings
 
-    def find_chi_SW(): ...
+            res_coupling_strengths.append(g)
+        self.set_E_C_effs(fluxonium_E_C_effs)
+        self.res_couplings = res_couplings
+        self.res_coupling_strengths = res_coupling_strengths
+
+    def find_chi_SW(self, eigenergies, eigstates, n_op, g, fr, nr_zpf, number_states):
+
+        chi = 0
+
+        for state_ind in range(number_states):
+
+            chi = chi + get_chi_ij(0, state_ind, eigenergies, eigstates, n_op, g, fr, nr_zpf)-get_chi_ij(1, state_ind, eigenergies, eigstates, n_op, g, fr, nr_zpf)
+
+        return chi
+    
+    def find_chi_over_flux_SW(self, res_ind, number_states, phi_es):
+
+        g = self.res_coupling_strengths[res_ind]
+        res = self.resonators[res_ind]
+        fr = res.get_freq()
+        nr_zpf = res.get_n_zpf()
+        n_op = self.get_charge_op()
+
+        chis = []
+
+        for phi_ext in phi_es:
+            h_effs = self.get_h_effs(phi_ext)
+            h_eff = h_effs[res_ind]
+            eigenergies, eigstates = h_eff.eigenstates()
+    
+            chi = self.find_chi_SW(eigenergies, eigstates, n_op, g, fr, nr_zpf, number_states)
+            chis.append(chi)
+        E_C_effs = self.E_C_effs
+        plt.plot(phi_es, chis)
+        plt.xlabel(r'$\phi_e$')
+        plt.ylabel(r'$\chi/2\pi$')
+
+        return chis
 
     def find_chi_full(self, res_ind, phi_es):
         if not hasattr(self, "res_couplings"):
@@ -169,7 +218,9 @@ class Fluxonium(Device):
         chis = []
 
         for phi_ext in phi_es:
-            H_0 = tensor( self.get_h_eff(phi_e = phi_ext), res.get_h_eff())
+            h_effs = self.get_h_effs(phi_ext)
+            h_eff = h_effs[res_ind]
+            H_0 = tensor( h_eff, res.get_h_eff() )
             H_tot = H_0 + self.res_couplings[res_ind]
             energies, states = H_tot.eigenstates()
 
@@ -185,8 +236,8 @@ class Fluxonium(Device):
             chi = f01_plus_chi- f_01
             chis.append(chi)
         plt.plot(phi_es, chis)
-        plt.xlabel('\phi_e')
-        plt.ylabel('\chi/2\pi')
+        plt.xlabel(r'$\phi_e$')
+        plt.ylabel(r'$\chi/2\pi$')
         return chis
 
     def get_charge_op(self):
@@ -197,8 +248,8 @@ class Fluxonium(Device):
         n_op = -1j/(2*delta_phi)*(n_up+n_down)
         return n_op
     
-    def set_E_C_eff(self, E_C_eff):
-        self.E_C_eff = E_C_eff
+    def set_E_C_effs(self, E_C_effs):
+        self.E_C_effs = E_C_effs
 
     def identify_state_index(self, states_to_identify, eigenstates):
 
@@ -224,6 +275,33 @@ class Double_Junc_Fluxonium(Device):
         self.E_C = E_C
         self.E_L = E_L
         self.resonators = resonators
+
+
+
+def get_g_ij(state_i, state_j, eigstates,  n_op, g, nr_zpf):
+
+    g_ij = nr_zpf * eigstates[state_i].overlap(2*np.pi*(g*n_op) * eigstates[state_j]) # radians
+
+    return g_ij
+
+def get_w_ij(i, j, eigenergies):
+
+    w_ij = 2*np.pi*(eigenergies[j]- eigenergies[i])
+
+    return w_ij
+
+def get_chi_ij(i, j, eigenergies, eigstates, n_op, g, fr, nr_zpf):
+
+    w_ij = get_w_ij(i, j, eigenergies)
+    g_ij = get_g_ij(i, j, eigstates, n_op, g, nr_zpf)
+
+    w_res = 2*np.pi*fr
+    chi_ij = np.abs(g_ij)**2*(1/(w_ij-w_res)+1/(w_ij+w_res))*10**3/(2*np.pi) # MHz
+
+    return chi_ij
+
+
+
     
 
 
