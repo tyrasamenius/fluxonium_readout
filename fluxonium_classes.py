@@ -40,7 +40,7 @@ class Resonator(Device):
     def get_h_eff(self):
         if self.E_C_eff is None:
             raise ValueError("E_C_eff not set")
-        eff_freq = np.sqrt(self.E_C_eff * self.E_L_r)
+        eff_freq = np.sqrt(8*self.E_C_eff * self.E_L_r)
         return self.get_h(eff_freq)
     
     def get_charge_op(self):
@@ -203,7 +203,7 @@ class Fluxonium(Device):
         E_C_effs = self.E_C_effs
         plt.plot(phi_es, chis)
         plt.xlabel(r'$\phi_e$')
-        plt.ylabel(r'$\chi/2\pi$')
+        plt.ylabel(r'$\chi/2\pi$ (MHz)')
 
         return chis
 
@@ -216,29 +216,35 @@ class Fluxonium(Device):
         a_dag = tensor(qeye(self.N_phi), a.dag())
 
         chis = []
-
+        fqs = []
+        frs = []
         for phi_ext in phi_es:
             h_effs = self.get_h_effs(phi_ext)
             h_eff = h_effs[res_ind]
-            H_0 = tensor( h_eff, res.get_h_eff() )
+            H_0 = tensor( h_eff, qeye(res.fock_dim) ) + tensor( qeye(self.N_phi), res.get_h_eff() )
             H_tot = H_0 + self.res_couplings[res_ind]
             energies, states = H_tot.eigenstates()
 
             ground_state = states[0]
             state_q1_r0 = states[1] # assumes qubit frequency is below resonator
             f_01 = energies[1]-energies[0]
+            fqs.append(f_01)
 
-            identified_state_ids = self.identify_state_index([a_dag*ground_state, a_dag*state_q1_r0], states)
+            identified_state_ids = self.identify_state_index([(a_dag * ground_state).unit(), (a_dag * state_q1_r0).unit()], states)
             state_id_q0_r1 = identified_state_ids[0]
             state_id_q1_r1 = identified_state_ids[1]
+            print(state_id_q0_r1, state_id_q1_r1)
             f01_plus_chi = energies[state_id_q1_r1]-energies[state_id_q0_r1]
+
+            fr = energies[state_id_q0_r1] - energies[0]
+            frs.append(fr)
             
-            chi = f01_plus_chi- f_01
+            chi = (f01_plus_chi - f_01)*10**3
             chis.append(chi)
         plt.plot(phi_es, chis)
         plt.xlabel(r'$\phi_e$')
-        plt.ylabel(r'$\chi/2\pi$')
-        return chis
+        plt.ylabel(r'$\chi/2\pi$ (MHz)')
+        return chis, frs, fqs
 
     def get_charge_op(self):
         N_phi = self.N_phi
@@ -266,6 +272,7 @@ class Fluxonium(Device):
             indices.append(eigstate_ind)
         return indices
     
+    
 class Double_Junc_Fluxonium(Device):
     def __init__(self, E_J, E_C, E_L, resonators = None, N_phi = 301, nbr_periods = 6):
         self.N_phi = N_phi
@@ -286,7 +293,7 @@ def get_g_ij(state_i, state_j, eigstates,  n_op, g, nr_zpf):
 
 def get_w_ij(i, j, eigenergies):
 
-    w_ij = 2*np.pi*(eigenergies[j]- eigenergies[i])
+    w_ij = 2*np.pi*(eigenergies[i] - eigenergies[j])
 
     return w_ij
 
