@@ -270,6 +270,18 @@ class Fluxonium(Device):
             eigstate_ind = np.argmax(overlaps[unknown_id,:])
             indices.append(eigstate_ind)
         return indices
+
+    def get_coupled_hamiltonian(self, res_ind, phi_e):
+
+        res = self.resonators[res_ind]
+        h_effs = self.get_h_effs(phi_e)
+        h_eff = h_effs[res_ind]
+        H_0 = tensor( h_eff, qeye(res.fock_dim) ) + tensor( qeye(self.N_phi), res.get_h_eff() )
+        H_tot = H_0 + self.res_couplings[res_ind]
+
+        return H_tot
+        
+
     
     
 class Double_Junc_Fluxonium(Device):
