@@ -233,7 +233,6 @@ class Fluxonium(Device):
             identified_state_ids = self.identify_state_index([(a_dag * ground_state).unit(), (a_dag * state_q1_r0).unit()], states)
             state_id_q0_r1 = identified_state_ids[0]
             state_id_q1_r1 = identified_state_ids[1]
-            print(state_id_q0_r1, state_id_q1_r1)
             f01_plus_chi = energies[state_id_q1_r1]-energies[state_id_q0_r1]
 
             fr = energies[state_id_q0_r1] - energies[0]
