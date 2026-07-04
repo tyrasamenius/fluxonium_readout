@@ -253,6 +253,17 @@ class Fluxonium(Device):
         n_op = -1j/(2*delta_phi)*(n_up+n_down)
         return n_op
     
+    def get_n_zpf(self, phi_e):
+        n_charge_op = self.get_charge_op()
+        H = self.get_h_bare(phi_e)
+        eigenenergies, eigenstates = H.eigenstates()
+        g_state = eigenstates[0]
+        e_state = eigenstates[1]
+
+        n_zpf = np.abs(g_state.overlap(n_charge_op*e_state))
+
+        return n_zpf
+    
     def set_E_C_effs(self, E_C_effs):
         self.E_C_effs = E_C_effs
 
@@ -281,9 +292,6 @@ class Fluxonium(Device):
 
         return H_tot
         
-
-    
-    
 class Double_Junc_Fluxonium(Device):
     def __init__(self, E_J, E_C, E_L, resonators = None, N_phi = 301, nbr_periods = 6):
         self.N_phi = N_phi
