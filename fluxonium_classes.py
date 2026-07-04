@@ -244,6 +244,38 @@ class Fluxonium(Device):
         plt.xlabel(r'$\phi_e$')
         plt.ylabel(r'$\chi/2\pi$ (MHz)')
         return chis, frs, fqs
+    
+        
+    def Purcell_lim_T1_analytical(self, res_ind, phi_e, kappa_r):
+        H_effs = self.get_h_effs(phi_e)
+        H_eff = H_effs[res_ind]
+        eigenenergies, eigenstates = H_eff.eigenstates(eigvals=4)
+        f_q = eigenenergies[1] - eigenenergies[0]
+
+        res = self.resonators[res_ind]
+        f_r = res.freq
+
+        delta = f_r - f_q
+
+        g_charge_charge = self.res_coupling_strengths[res_ind]
+        g = g_charge_charge * ( self.get_n_zpf(phi_e) * res.get_n_zpf())
+
+        gamma = kappa_r*np.abs(g/delta)**2
+        T1 = 1/gamma * 10 ** (-6) # ms
+        return T1
+    
+    def Purcell_lim_T1_sim(self, res_ind, phi_e, kappa_r):
+        H = self.get_coupled_hamiltonian(res_ind, phi_e)
+        res = self.resonators[res_ind]
+        
+        a_op = tensor(qeye(self.N_phi), destroy(res.fock_dim))
+        eigenenergies, eigenstates = H.eigenstates(eigvals=4)
+        g_state = eigenstates[0]
+        e_state = eigenstates[1] # assuming f_q < f_r
+        gamma = kappa_r*np.abs(g_state.overlap(a_op * e_state))**2
+        
+        T1 = 1/gamma
+        return T1 * 10 ** (-6) # ms
 
     def get_charge_op(self):
         N_phi = self.N_phi
@@ -252,6 +284,16 @@ class Fluxonium(Device):
         n_down = Qobj(np.diag(-1*np.ones(N_phi - 1), -1))
         n_op = -1j/(2*delta_phi)*(n_up+n_down)
         return n_op
+    
+    def get_n_zpf(self, phi_e):
+        n_charge_op = self.get_charge_op()
+        H = self.get_h_bare(phi_e)
+        eigenenergies, eigenstates = H.eigenstates()
+        g_state = eigenstates[0]
+        e_state = eigenstates[1]
+
+        n_zpf = np.abs(g_state.overlap(n_charge_op*e_state))
+        return n_zpf
     
     def set_E_C_effs(self, E_C_effs):
         self.E_C_effs = E_C_effs
@@ -270,8 +312,17 @@ class Fluxonium(Device):
             eigstate_ind = np.argmax(overlaps[unknown_id,:])
             indices.append(eigstate_ind)
         return indices
-    
-    
+
+    def get_coupled_hamiltonian(self, res_ind, phi_e):
+
+        res = self.resonators[res_ind]
+        h_effs = self.get_h_effs(phi_e)
+        h_eff = h_effs[res_ind]
+        H_0 = tensor( h_eff, qeye(res.fock_dim) ) + tensor( qeye(self.N_phi), res.get_h_eff() )
+        H_tot = H_0 + self.res_couplings[res_ind]
+
+        return H_tot
+        
 class Double_Junc_Fluxonium(Device):
     def __init__(self, E_J, E_C, E_L, resonators = None, N_phi = 301, nbr_periods = 6):
         self.N_phi = N_phi
