@@ -1,6 +1,9 @@
 import numpy as np
 from qutip import *
 import matplotlib.pyplot as plt
+import math
+from scipy.sparse import kron, eye, diags
+from scipy.sparse.linalg import eigsh
 
 class Device:
     e = 1.602*10**(-19)
@@ -88,9 +91,10 @@ class Fluxonium(Device):
         delta_phi = nbr_periods*2*np.pi/(N_phi-1)
         d_dphase_op = (n_up+n_down+n_diag)/delta_phi**2
         phase_op = Qobj(np.diag(phi_vals))
+        cos_phase_op = Qobj(np.diag(np.cos(phi_vals)))
         
         Cterm = -4*E_C*d_dphase_op
-        Jterm = -self.E_J*phase_op.cosm()
+        Jterm = -self.E_J*cos_phase_op
         Lterm = 1/2*self.E_L*(phase_op-phi_e)**2
         H = Cterm + Jterm + Lterm
         return H
@@ -111,16 +115,14 @@ class Fluxonium(Device):
 
         return H_effs
 
-    def get_charge_op(self): ...
-
     def plot_wavefuncs(self, nbr_wavfuncs, phi_e):
         H = self.get_h_bare(phi_e)
-        eigenenergies, eigenstates = H.eigenstates()
+        vals, vecs = H.eigenstates()
         fig, axes = plt.subplots(1, nbr_wavfuncs, figsize=(12, 3))
 
         for wavfunc_idx in range(nbr_wavfuncs):
             ax = axes[wavfunc_idx]
-            psi = eigenstates[wavfunc_idx].full().flatten()
+            psi = vecs[wavfunc_idx].full().flatten()
             ax.plot(self.phi_vals, psi.real)
             ax.set_xlabel('$\phi$')
             ax.set_title(fr"Phase distribution, $|{wavfunc_idx}\rangle$")
@@ -134,9 +136,9 @@ class Fluxonium(Device):
 
         for phi_e_idx, phi_e in enumerate(phi_es):
             H = self.get_h_bare(phi_e)
-            eigenenergies, eigenstates = H.eigenstates()
+            vals, vecs = H.eigenstates()
             for i in range(1, N_levels):
-                energy_over_flux_mat[phi_e_idx, i] = eigenenergies[i] - eigenenergies[0]
+                energy_over_flux_mat[phi_e_idx, i] = vals[i] - vals[0]
 
 
         for i in range(1, N_levels):
@@ -173,13 +175,13 @@ class Fluxonium(Device):
         self.res_couplings = res_couplings
         self.res_coupling_strengths = res_coupling_strengths
 
-    def find_chi_SW(self, eigenergies, eigstates, n_op, g, fr, nr_zpf, number_states):
+    def find_chi_SW(self, eigvals, eigvecs, n_op, g, fr, nr_zpf, number_states):
 
         chi = 0
 
         for state_ind in range(number_states):
 
-            chi = chi + get_chi_ij(0, state_ind, eigenergies, eigstates, n_op, g, fr, nr_zpf)-get_chi_ij(1, state_ind, eigenergies, eigstates, n_op, g, fr, nr_zpf)
+            chi = chi + get_chi_ij(0, state_ind, eigvals, eigvecs, n_op, g, fr, nr_zpf)-get_chi_ij(1, state_ind, eigvals, eigvecs, n_op, g, fr, nr_zpf)
 
         return chi
     
@@ -196,9 +198,9 @@ class Fluxonium(Device):
         for phi_ext in phi_es:
             h_effs = self.get_h_effs(phi_ext)
             h_eff = h_effs[res_ind]
-            eigenergies, eigstates = h_eff.eigenstates()
+            vals, vecs = h_eff.eigenstates()
     
-            chi = self.find_chi_SW(eigenergies, eigstates, n_op, g, fr, nr_zpf, number_states)
+            chi = self.find_chi_SW(vals, vecs, n_op, g, fr, nr_zpf, number_states)
             chis.append(chi)
         E_C_effs = self.E_C_effs
         plt.plot(phi_es, chis)
@@ -249,8 +251,8 @@ class Fluxonium(Device):
     def Purcell_lim_T1_analytical(self, res_ind, phi_e, kappa_r):
         H_effs = self.get_h_effs(phi_e)
         H_eff = H_effs[res_ind]
-        eigenenergies, eigenstates = H_eff.eigenstates(eigvals=4)
-        f_q = eigenenergies[1] - eigenenergies[0]
+        vals, vecs = H_eff.eigenstates(eigvals=4)
+        f_q = vals[1] - vals[0]
 
         res = self.resonators[res_ind]
         f_r = res.freq
@@ -269,9 +271,9 @@ class Fluxonium(Device):
         res = self.resonators[res_ind]
         
         a_op = tensor(qeye(self.N_phi), destroy(res.fock_dim))
-        eigenenergies, eigenstates = H.eigenstates(eigvals=4)
-        g_state = eigenstates[0]
-        e_state = eigenstates[1] # assuming f_q < f_r
+        vals, vecs = H.eigenstates(eigvals=4)
+        g_state = vecs[0]
+        e_state = vecs[1] # assuming f_q < f_r
         gamma = kappa_r*np.abs(g_state.overlap(a_op * e_state))**2
         
         T1 = 1/gamma
@@ -279,7 +281,7 @@ class Fluxonium(Device):
 
     def get_charge_op(self):
         N_phi = self.N_phi
-        delta_phi = self.nbr_periods*np.pi/(N_phi-1)
+        delta_phi = self.nbr_periods*2*np.pi/(N_phi-1)
         n_up = Qobj(np.diag(np.ones(N_phi - 1), 1))
         n_down = Qobj(np.diag(-1*np.ones(N_phi - 1), -1))
         n_op = -1j/(2*delta_phi)*(n_up+n_down)
@@ -288,9 +290,9 @@ class Fluxonium(Device):
     def get_n_zpf(self, phi_e):
         n_charge_op = self.get_charge_op()
         H = self.get_h_bare(phi_e)
-        eigenenergies, eigenstates = H.eigenstates()
-        g_state = eigenstates[0]
-        e_state = eigenstates[1]
+        vals, vecs = H.eigenstates()
+        g_state = vecs[0]
+        e_state = vecs[1]
 
         n_zpf = np.abs(g_state.overlap(n_charge_op*e_state))
         return n_zpf
@@ -324,14 +326,136 @@ class Fluxonium(Device):
         return H_tot
         
 class Double_Junc_Fluxonium(Device):
-    def __init__(self, E_J, E_C, E_L, resonators = None, N_phi = 301, nbr_periods = 6):
-        self.N_phi = N_phi
+
+    def __init__(self, E_J1, #GHz
+                 E_J2, #GHz
+                 C_J1, # fF
+                 C_J2, # fF
+                   C, # fF
+                   E_L, # GHz
+                   resonators = None, 
+                   delta_phi = 0.15, 
+                   nbr_periods = 6):
+        self.phi_vals = np.arange(-nbr_periods*np.pi, nbr_periods*np.pi+delta_phi, delta_phi)
+        self.N_phi = len(self.phi_vals)
         self.nbr_periods = nbr_periods
-        self.phi_vals = np.linspace(-nbr_periods*np.pi, nbr_periods*np.pi, N_phi)
-        self.E_J = E_J
-        self.E_C = E_C
+        self.E_J1 = E_J1
+        self.E_J2 = E_J2
+    
+        self.C_J1 = C_J1
+        self.C_J2 = C_J2
+        self.C = C
+        det_cap_matrix = C_J1*C_J2 + C * (C_J1 + C_J2)
+        self.E_C1 = (C_J2+C)/(2*det_cap_matrix) * self.unit_fF_inv_to_GHz 
+        self.E_C2 = (C_J1+C)/(2*det_cap_matrix) * self.unit_fF_inv_to_GHz # GHz
+        self.g_12 = 4*C/(det_cap_matrix) * self.unit_fF_inv_to_GHz
+
         self.E_L = E_L
         self.resonators = resonators
+        self.E_C1_effs = None
+        self.E_C2_effs = None
+        self.g_12_effs = None
+
+        phase_op = diags(self.phi_vals)
+        self.phase1 = kron(phase_op, eye(self.N_phi))
+        self.phase2 = kron(eye(self.N_phi), phase_op)
+
+        cos_phase_op = diags(np.cos(self.phi_vals))
+        self.cos1 = kron(cos_phase_op, eye(self.N_phi))
+        self.cos2 = kron(eye(self.N_phi), cos_phase_op)
+
+        #delta_phi = nbr_periods*2*np.pi/(self.N_phi-1)
+
+        d1_op = diags([-np.ones(self.N_phi-1), np.ones(self.N_phi-1)], [-1, 1]) / (2*delta_phi)
+        n_op = -1j * d1_op
+        self.n1_n2_op = kron(n_op, n_op)
+
+        d2_op = diags([np.ones(self.N_phi-1), -2*np.ones(self.N_phi), np.ones(self.N_phi-1)], [-1, 0, 1]) / delta_phi**2
+        n_sq_op = -1 * d2_op
+        self.n1_squared = kron(n_sq_op, eye(self.N_phi))
+        self.n2_squared = kron(eye(self.N_phi), n_sq_op)
+
+
+    def get_h(self, E_C1, E_C2, g_12, phi_e):
+
+        phi1, phi2 = np.meshgrid(self.phi_vals,self. phi_vals, indexing="ij")
+        Ldiag = (phi1+phi2-phi_e)**2
+        
+        Cterm = 4 * E_C1 * self.n1_squared + 4 * E_C2 * self.n2_squared - g_12 * self.n1_n2_op
+        Jterm = -self.E_J1*self.cos1-self.E_J2*self.cos2
+        Lterm = 1/2*self.E_L*diags(Ldiag.ravel())
+        H = Cterm + Jterm + Lterm
+        return H
+    
+    def get_h_bare(self, phi_e):
+        return self.get_h(self.E_C1, self.E_C2, self.g_12, phi_e)
+    
+    def get_h_effs(self, phi_e):
+
+        if any(E is None for E in (self.E_C1_effs, self.E_C2_effs, self.g_12_effs)):
+            raise ValueError("Effective charging energies not set")
+        
+        H_effs = []
+        for E_C_eff in (self.E_C1_effs, self.E_C2_effs, self.g_12_effs):
+            h = self.get_h(E_C_eff, phi_e)
+            H_effs.append(h)
+
+        return H_effs
+    
+    def eigenstates(self, phi_e, N_levels = 5):
+        H = self.get_h_bare(phi_e)
+        vals, vecs = eigsh(H, k = N_levels, which="SA")
+        return vals, vecs
+
+    def plot_wavefuncs(self, nbr_wavfuncs, phi_e):
+        vals, vecs = self.eigenstates(phi_e, N_levels = nbr_wavfuncs)
+        #Z = [np.abs(eigenstate_vector_to_matrix(vecs[:, i], self.N_phi))**2 for i in range(nbr_wavfuncs)]
+        Z = [eigenstate_vector_to_matrix(vecs[:, i], self.N_phi).real for i in range(nbr_wavfuncs)]
+
+        X, Y = np.meshgrid(self.phi_vals, self.phi_vals)
+
+        fig_cols = math.ceil(math.sqrt(nbr_wavfuncs))
+        fig_rows = math.ceil(nbr_wavfuncs / fig_cols)
+
+        fig, axes = plt.subplots(fig_rows, fig_cols, figsize=(12, 10))
+        pcms = []
+
+        for fig_row in range(fig_rows):
+            for fig_col in range(fig_cols):
+
+                if (fig_row+1) * (fig_col+1) > nbr_wavfuncs:
+                    break
+
+                ax = axes[fig_row, fig_col]
+                pcm = ax.pcolor(X, Y, Z[fig_row*fig_cols+fig_col])
+                pcms.append(pcm)
+                ax.set_xlabel(r'$\phi_1$')
+                ax.set_ylabel(r'$\phi_2$')
+                ax.set_title(fr"Phase distribution, $|{fig_row*fig_cols+fig_col}\rangle$")
+                colb = fig.colorbar(pcm, ax=ax, shrink=0.8)
+                colb.set_label(r'$|\langle \phi | i \rangle|^2$')
+
+        for ax in axes[nbr_wavfuncs:]:
+            ax.set_visible(False)
+
+        plt.tight_layout()
+        plt.show()
+    
+    def plot_transistions_over_flux(self, phi_es, N_levels):
+        N_flux = len(phi_es)
+        energy_over_flux_mat = np.empty((N_flux, N_levels))
+
+        for phi_e_idx, phi_e in enumerate(phi_es):
+            vals, vecs = self.eigenstates(phi_e, N_levels = N_levels)
+            for i in range(1, N_levels):
+                energy_over_flux_mat[phi_e_idx, i] = vals[i] - vals[0]
+
+        for i in range(1, N_levels):
+            j = N_levels - i
+            plt.plot(phi_es, energy_over_flux_mat[:, j], label = rf'E_{j}')
+        plt.xlabel('$\Phi_e/\Phi_0$')
+        plt.ylabel('$E-E_0$ (GHz)')
+        plt.legend()
 
 
 
@@ -356,6 +480,13 @@ def get_chi_ij(i, j, eigenergies, eigstates, n_op, g, fr, nr_zpf):
     chi_ij = np.abs(g_ij)**2*(1/(w_ij-w_res)+1/(w_ij+w_res))*10**3/(2*np.pi) # MHz
 
     return chi_ij
+
+def eigenstate_vector_to_matrix(state_vector, matrix_dim):
+    state_matrix = np.empty((matrix_dim, matrix_dim), dtype=complex)
+    for ind_1 in range(matrix_dim):
+        for ind_2 in range(matrix_dim):
+            state_matrix[ind_1, ind_2] = state_vector[ind_1*matrix_dim+ind_2]
+    return state_matrix
 
 
 
