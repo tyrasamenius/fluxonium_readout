@@ -125,7 +125,7 @@ class Fluxonium(Device):
         Lterm = 1/2*self.E_L*(phase_op-phi_e)**2
         H = Cterm + Jterm + Lterm
         return H
-    
+
     def get_h_bare(self, phi_e):
         return self.get_h(self.E_C, phi_e)
     
@@ -174,7 +174,7 @@ class Fluxonium(Device):
         plt.xlabel('$\Phi_e/\Phi_0$')
         plt.ylabel('$E-E_0$ (GHz)')
         plt.legend()
-    
+
     def add_resonator_coupling(self, resonators, capacitance_matrices): 
         
         if len(resonators) != len(capacitance_matrices):
@@ -382,7 +382,7 @@ class Double_Junc_Fluxonium(Device):
         self.eff_ECs = None
         self.res_coupling_strengths = None
         self.res_couplings = None
-        self.N_charge = 21
+        self.N_charge = 11
 
         phase_op = diags(self.phi_vals)
         self.phase1 = kron(phase_op, eye(self.N_phi))
@@ -403,12 +403,199 @@ class Double_Junc_Fluxonium(Device):
         self.n1_squared = kron(self.n_sq_op, eye(self.N_phi))
         self.n2_squared = kron(eye(self.N_phi), self.n_sq_op)
 
+    def _get_fast_mode_eigensystem_symm(self, E_Ci, phi_vals, N_charge):
+        if (
+            not isinstance(N_charge, (int, np.integer))
+            or N_charge < 3
+            or N_charge % 2 == 0
+        ):
+            raise ValueError("N_charge must be an odd integer of at least 3")
+
+        phi_vals = np.asarray(phi_vals, dtype=float)
+        if phi_vals.ndim != 1 or phi_vals.size < 3:
+            raise ValueError("phi_vals must be a one-dimensional grid of at least 3 points")
+        if np.any(np.diff(phi_vals) <= 0):
+            raise ValueError("phi_vals must be strictly increasing")
+
+        n_vals = np.arange(N_charge) - N_charge // 2
+        cos_theta_op = (
+            np.diag(np.ones(N_charge - 1), 1)
+            + np.diag(np.ones(N_charge - 1), -1)
+        ) / 2
+        charging_i = np.diag(4 * E_Ci * n_vals**2)
+        energies = np.empty((phi_vals.size, N_charge))
+        states = np.empty((phi_vals.size, N_charge, N_charge), dtype=complex)
+
+        for phi_idx, phi in enumerate(phi_vals):
+            H_i = charging_i - (
+                self.E_J1 + self.E_J2
+            ) * np.cos(phi / 2) * cos_theta_op
+            eigenvalues, eigenvectors = np.linalg.eigh(H_i)
+            energies[phi_idx] = eigenvalues
+            states[phi_idx] = eigenvectors
+
+        for phi_idx in range(1, phi_vals.size):
+            for mode_idx in range(N_charge):
+                overlap = np.vdot(
+                    states[phi_idx - 1, :, mode_idx],
+                    states[phi_idx, :, mode_idx],
+                )
+                if overlap != 0:
+                    states[phi_idx, :, mode_idx] *= np.exp(
+                        -1j * np.angle(overlap)
+                    )
+
+        return phi_vals, energies, states
+
+    def get_classical_approximation_symm(self, phi_e, phi_vals=None):
+        """Return the slow-mode potential with the fast mode at its classical minimum."""
+        if phi_vals is None:
+            phi_vals = self.phi_vals_symm
+        phi_vals = np.asarray(phi_vals, dtype=float)
+        potential = (
+            -np.abs((self.E_J1 + self.E_J2) * np.cos(phi_vals / 2))
+            + 0.5 * self.E_L * (phi_vals - phi_e)**2
+        )
+        return diags(potential)
+
+    def get_BO_correction_symm(self, E_Ci, phi_vals=None, N_charge=41):
+        """Return the exact conditional ground energy above the classical minimum. No harmonic approximation, the true groundstate energy of the fast mode is used."""
+        if phi_vals is None:
+            phi_vals = self.phi_vals_symm
+        phi_vals, energies, _ = self._get_fast_mode_eigensystem_symm(
+            E_Ci, phi_vals, N_charge
+        )
+        classical_josephson = -np.abs(
+            (self.E_J1 + self.E_J2) * np.cos(phi_vals / 2)
+        )
+        return diags(energies[:, 0] - classical_josephson)
+
+    def get_A_00(self, E_Ci, phi_vals=None, N_charge=41):
+        """Return A_00 = i <chi_0|d_phi chi_0> in the parallel-transport gauge."""
+        if phi_vals is None:
+            phi_vals = self.phi_vals_symm
+        phi_vals, _, states = self._get_fast_mode_eigensystem_symm(
+            E_Ci, phi_vals, N_charge
+        )
+        ground_states = states[:, :, 0]
+        derivative = np.gradient(ground_states, phi_vals, axis=0, edge_order=2)
+        connection = 1j * np.sum(np.conj(ground_states) * derivative, axis=1)
+        return np.real_if_close(connection)
+
+    def get_A_a0(self, E_Ci, phi_vals=None, N_charge=41):
+        """Return A_a0 = i <chi_a|d_phi chi_0> for all excited fast states."""
+        if phi_vals is None:
+            phi_vals = self.phi_vals_symm
+        phi_vals, energies, states = self._get_fast_mode_eigensystem_symm(
+            E_Ci, phi_vals, N_charge
+        )
+        cos_theta_op = (
+            np.diag(np.ones(N_charge - 1), 1)
+            + np.diag(np.ones(N_charge - 1), -1)
+        ) / 2
+        A_a0 = np.empty((phi_vals.size, N_charge - 1), dtype=complex)
+
+        for phi_idx, phi in enumerate(phi_vals):
+            if np.any(energies[phi_idx, 1:] <= energies[phi_idx, 0]):
+                raise ValueError(
+                    "The conditional internal ground state must be nondegenerate"
+                )
+            dH_i_dphi = (
+                (self.E_J1 + self.E_J2)
+                / 2
+                * np.sin(phi / 2)
+                * cos_theta_op
+            )
+            derivative_couplings = (
+                states[phi_idx, :, 1:].conj().T
+                @ dH_i_dphi
+                @ states[phi_idx, :, 0]
+            )
+            A_a0[phi_idx] = (
+                1j
+                * derivative_couplings
+                / (energies[phi_idx, 0] - energies[phi_idx, 1:])
+            )
+
+        return A_a0
+
+    def get_BH_correction_symm(
+        self, E_Cq, E_Ci, phi_vals=None, N_charge=41
+    ):
+        """Return the diagonal geometric correction 4 E_Cq sum_a |A_a0|^2."""
+        if phi_vals is None:
+            phi_vals = self.phi_vals_symm
+        phi_vals = np.asarray(phi_vals, dtype=float)
+        A_a0 = self.get_A_a0(E_Ci, phi_vals, N_charge)
+        quantum_metric = np.sum(np.abs(A_a0)**2, axis=1)
+        return diags(4 * E_Cq * quantum_metric)
+
+    def BO_h_symm(self, E_Cq, E_Ci, phi_e, N_charge=41):
+        """Build the single-band reduced Hamiltonian with the exact BO potential."""
+        return (
+            4 * E_Cq * self.n_sq_op
+            + self.get_classical_approximation_symm(phi_e)
+            + self.get_BO_correction_symm(E_Ci, N_charge=N_charge)
+        )
+
+    def BH_h_symm(self, E_Cq, E_Ci, phi_e, N_charge=41):
+        """Build the single-band reduced Hamiltonian with the diagonal geometric correction."""
+        return (
+            4 * E_Cq * self.n_sq_op
+            + self.get_classical_approximation_symm(phi_e)
+            + self.get_BO_correction_symm(E_Ci, N_charge=N_charge)
+            + self.get_BH_correction_symm(E_Cq, E_Ci, N_charge=N_charge)
+        )
+
+    def plot_transitions_over_flux_base(
+        self, hamiltonian_factory, phi_es, N_levels
+    ):
+        """Plot transitions for a Hamiltonian factory evaluated at each flux."""
+        energy_over_flux = np.empty((len(phi_es), N_levels))
+        for flux_idx, phi_e in enumerate(phi_es):
+            hamiltonian = hamiltonian_factory(phi_e)
+            energies = eigsh(
+                hamiltonian, k=max(N_levels, 15), which="SA", return_eigenvectors=False
+            )
+            energies.sort()
+            energy_over_flux[flux_idx] = energies[:N_levels] - energies[0]
+
+        for level in range(1, N_levels):
+            plt.plot(phi_es, energy_over_flux[:, level], label=rf"$E_{level}$")
+        plt.xlabel(r"$\Phi_e/\Phi_0$")
+        plt.ylabel(r"$E-E_0$ (GHz)")
+        plt.legend()
+        return energy_over_flux
+
+    def plot_transitions_over_flux_BO(
+        self, E_Cq, E_Ci, phi_es, N_levels, N_charge=41
+    ):
+        """Plot transitions using the single-band Born-Oppenheimer Hamiltonian."""
+        return self.plot_transitions_over_flux_base(
+            lambda phi_e: self.BO_h_symm(
+                E_Cq, E_Ci, phi_e, N_charge=N_charge
+            ),
+            phi_es,
+            N_levels,
+        )
+
+    def plot_transitions_over_flux_BH(
+        self, E_Cq, E_Ci, phi_es, N_levels, N_charge=41
+    ):
+        """Plot transitions using the BO Hamiltonian with the diagonal BH correction."""
+        return self.plot_transitions_over_flux_base(
+            lambda phi_e: self.BH_h_symm(
+                E_Cq, E_Ci, phi_e, N_charge=N_charge
+            ),
+            phi_es,
+            N_levels,
+        )
+
     def get_h_symm(self, E_Cq, E_Ci, phi_e):
         N_charge = self.N_charge
         n_vals = np.arange(-N_charge//2+1, N_charge//2 + 1)
         ni_squared = kron(eye(self.N_phi), diags(n_vals )**2)
         
-        #nq_squared = kron(self.n_op**2, eye(N_charge))
         nq_squared = kron(self.n_sq_op, eye(N_charge))
         Cterm = 4 * E_Cq * nq_squared + 4 * E_Ci * ni_squared 
         cos_phase_over_2_op = diags(np.cos(1/2*self.phi_vals_symm))
@@ -421,8 +608,7 @@ class Double_Junc_Fluxonium(Device):
         H = Cterm + Jterm + Lterm
         return H
 
-    def get_h(self, E_C1, E_C2, g_12, phi_e):
-
+    def get_h_12_basis(self, E_C1, E_C2, g_12, phi_e):
         phi1, phi2 = np.meshgrid(self.phi_vals,self. phi_vals, indexing="ij")
         Ldiag = (phi1+phi2-phi_e)**2
         
@@ -432,23 +618,23 @@ class Double_Junc_Fluxonium(Device):
         H = Cterm + Jterm + Lterm
         return H
     
-    def get_h_bare(self, phi_e):
-        return self.get_h(self.E_C1, self.E_C2, self.g_12, phi_e)
+    def get_h_bare_12_basis(self, phi_e):
+        return self.get_h_12_basis(self.E_C1, self.E_C2, self.g_12, phi_e)
     
-    def get_h_effs(self, phi_e):
+    def get_h_effs_12_basis(self, phi_e):
 
         if self.eff_ECs is None:
             raise ValueError("Effective charging energies not set")
         
         H_effs = []
         for E_C_eff in self.eff_ECs:
-            h = self.get_h(E_C_eff[0], E_C_eff[1], E_C_eff[2], phi_e)
+            h = self.get_h_12_basis(E_C_eff[0], E_C_eff[1], E_C_eff[2], phi_e)
             H_effs.append(h)
 
         return H_effs
     
-    def eigenstates(self, phi_e, N_levels = 5):
-        H = self.get_h_bare(phi_e)
+    def eigenstates_12_basis(self, phi_e, N_levels = 5):
+        H = self.get_h_bare_12_basis(phi_e)
         vals, vecs = eigsh(H, k = max(N_levels, 15), which="SA")
 
         idx = np.argsort(vals)
@@ -464,22 +650,45 @@ class Double_Junc_Fluxonium(Device):
         vals = vals[idx]
         vecs = vecs[:, idx]
         return vals, vecs
-    
-    def plot_wavefuncs_symm(self, E_Cq, E_Ci, nbr_wavfuncs, phi_e):
 
+    def plot_wavefuncs_symm(self, E_Cq, E_Ci, nbr_wavfuncs, phi_e):
+        return self._plot_wavefuncs_symm(
+            E_Cq, E_Ci, nbr_wavfuncs, phi_e, plot_probability=True
+        )
+
+    def plot_wavefuncs_real_symm(self, E_Cq, E_Ci, nbr_wavfuncs, phi_e):
+        return self._plot_wavefuncs_symm(
+            E_Cq, E_Ci, nbr_wavfuncs, phi_e, plot_probability=False
+        )
+
+    def _plot_wavefuncs_symm(
+        self, E_Cq, E_Ci, nbr_wavfuncs, phi_e, plot_probability
+    ):
         vals, vecs = self.eigenstates_symm(E_Cq, E_Ci, phi_e, N_levels=nbr_wavfuncs)
 
         N_charge = self.N_charge
 
-        # Each eigenvector has dimension N_phi * N_charge
-        Z = [
-            vecs[:, i].reshape(self.N_phi, N_charge).real
+        wavefunctions = [
+            vecs[:, i].reshape(self.N_phi, N_charge)
             for i in range(nbr_wavfuncs)
+        ]
+        plot_data = [
+            np.abs(wavefunction)**2 if plot_probability else wavefunction.real
+            for wavefunction in wavefunctions
         ]
 
         n_vals = np.arange(-N_charge//2 + 1, N_charge//2 + 1)
 
         X, Y = np.meshgrid(n_vals, self.phi_vals_symm)
+        data_max = max(np.max(np.abs(values)) for values in plot_data)
+        if plot_probability:
+            color_limits = (0, data_max)
+            color_map = "viridis"
+            colorbar_label = r'$|\langle \phi_q,n_i|i\rangle|^2$'
+        else:
+            color_limits = (-data_max, data_max)
+            color_map = "RdBu_r"
+            colorbar_label = r'$\mathrm{Re}\,\langle \phi_q,n_i|i\rangle$'
 
         fig_cols = math.ceil(math.sqrt(nbr_wavfuncs))
         fig_rows = math.ceil(nbr_wavfuncs / fig_cols)
@@ -498,19 +707,22 @@ class Double_Junc_Fluxonium(Device):
 
             ax = axes[fig_row, fig_col]
 
-            pcm = ax.pcolor(
+            pcm = ax.pcolormesh(
                 X,
                 Y,
-                Z[i],
-                shading="auto"
+                plot_data[i],
+                shading="auto",
+                cmap=color_map,
+                vmin=color_limits[0],
+                vmax=color_limits[1],
             )
 
             ax.set_xlabel(r'$n_i$')
-            ax.set_ylabel(r'$\phi_1$')
+            ax.set_ylabel(r'$\phi_q$')
             ax.set_title(fr"State $|{i}\rangle$")
 
             colb = fig.colorbar(pcm, ax=ax, shrink=0.8)
-            colb.set_label(r'$\mathrm{Re}\,\langle \phi_1,n_i|i\rangle$')
+            colb.set_label(colorbar_label)
 
         # Hide unused axes
         for i in range(nbr_wavfuncs, fig_rows * fig_cols):
@@ -520,9 +732,10 @@ class Double_Junc_Fluxonium(Device):
 
         plt.tight_layout()
         plt.show()
+        return fig, axes
 
-    def plot_wavefuncs(self, nbr_wavfuncs, phi_e):
-        vals, vecs = self.eigenstates(phi_e, N_levels = nbr_wavfuncs)
+    def plot_wavefuncs_12_basis(self, nbr_wavfuncs, phi_e):
+        vals, vecs = self.eigenstates_12_basis(phi_e, N_levels=nbr_wavfuncs)
         Z = [eigenstate_vector_to_matrix(vecs[:, i], self.N_phi).real for i in range(nbr_wavfuncs)]
 
         X, Y = np.meshgrid(self.phi_vals, self.phi_vals)
@@ -554,12 +767,12 @@ class Double_Junc_Fluxonium(Device):
         plt.tight_layout()
         plt.show()
     
-    def plot_transitions_over_flux(self, phi_es, N_levels):
+    def plot_transitions_over_flux_12_basis(self, phi_es, N_levels):
         N_flux = len(phi_es)
         energy_over_flux_mat = np.empty((N_flux, N_levels))
 
         for phi_e_idx, phi_e in enumerate(phi_es):
-            vals, vecs = self.eigenstates(phi_e, N_levels = N_levels)
+            vals, vecs = self.eigenstates_12_basis(phi_e, N_levels=N_levels)
             for i in range(1, N_levels):
                 energy_over_flux_mat[phi_e_idx, i] = vals[i] - vals[0]
 
@@ -586,7 +799,7 @@ class Double_Junc_Fluxonium(Device):
         plt.ylabel('$E-E_0$ (GHz)')
         plt.legend()
 
-    def add_resonator_coupling(self, resonators, capacitance_matrices): 
+    def add_resonator_coupling_12_basis(self, resonators, capacitance_matrices):
         
         if len(resonators) != len(capacitance_matrices):
             print('Number of resonators and couplings need to match')
@@ -613,16 +826,31 @@ class Double_Junc_Fluxonium(Device):
             res_coupling_strength_array = np.array([g1r, g2r])
             res_coupling_strengths.append(res_coupling_strength_array)
 
-            res_coupling_mode_1 = g1r * kron(self.get_charge_op(), kron(eye(self.N_phi), res.get_charge_op_sparse()))
-            res_coupling_mode_2 = g2r * kron(kron(eye(self.N_phi), self.get_charge_op()), res.get_charge_op_sparse())
+            res_coupling_mode_1 = g1r * kron(self.get_charge_op_12_basis(), kron(eye(self.N_phi), res.get_charge_op_sparse()))
+            res_coupling_mode_2 = g2r * kron(kron(eye(self.N_phi), self.get_charge_op_12_basis()), res.get_charge_op_sparse())
             res_couplings.append(np.array([res_coupling_mode_1, res_coupling_mode_2]))
 
         self.eff_ECs = eff_ECs
         self.res_coupling_strengths = res_coupling_strengths
         self.res_couplings = res_couplings
         return E_Cr, E_C1, E_C2, g1r, g2r, g12
+
+    def get_coupled_hamiltonian_12_basis(self, res_ind, phi_e):
+        """Build the 12-basis device-resonator Hamiltonian for one resonator."""
+        resonator = self.resonators[res_ind]
+        device_dimension = self.N_phi**2
+        h_eff = self.get_h_effs_12_basis(phi_e)[res_ind]
+        h_uncoupled = (
+            kron(h_eff, eye(resonator.fock_dim))
+            + kron(
+                eye(device_dimension),
+                resonator.get_h_eff_sparse(),
+            )
+        )
+        coupling = sum(self.res_couplings[res_ind])
+        return h_uncoupled + coupling
     
-    def find_chi_SW(self, eigvals, eigvecs, n_op, g1r, g2r, fr, nr_zpf, number_states):
+    def find_chi_SW_12_basis(self, eigvals, eigvecs, n_op, g1r, g2r, fr, nr_zpf, number_states):
 
         chi = 0
 
@@ -635,17 +863,17 @@ class Double_Junc_Fluxonium(Device):
 
         return chi
 
-    def find_chi_over_flux_SW(self, res_ind, number_states, phi_es):
+    def find_chi_over_flux_SW_12_basis(self, res_ind, number_states, phi_es):
         g1r, g2r = self.res_coupling_strengths[res_ind]
         res = self.resonators[res_ind]
         fr = res.get_freq()
         nr_zpf = res.get_n_zpf()
-        n_op = self.get_charge_op()
+        n_op = self.get_charge_op_12_basis()
 
         chis = []
 
         for phi_ext in phi_es:
-            h_effs = self.get_h_effs(phi_ext)
+            h_effs = self.get_h_effs_12_basis(phi_ext)
             h_eff = h_effs[res_ind]
             vals, vecs = eigsh(h_eff, k=number_states, which="SA")
 
@@ -653,7 +881,7 @@ class Double_Junc_Fluxonium(Device):
             vals = vals[idx]
             vecs = vecs[:, idx]
     
-            chi = self.find_chi_SW(vals, vecs, n_op, g1r, g2r, fr, nr_zpf, number_states)
+            chi = self.find_chi_SW_12_basis(vals, vecs, n_op, g1r, g2r, fr, nr_zpf, number_states)
             chis.append(chi)
 
         plt.plot(phi_es, chis)
@@ -662,14 +890,14 @@ class Double_Junc_Fluxonium(Device):
 
         return chis
     
-    def find_chi_full(self, res_ind, phi_ext):
+    def find_chi_full_12_basis(self, res_ind, phi_ext):
         res = self.resonators[res_ind]
         Nr = res.fock_dim
         Nq = self.N_phi ** 2
         a_dag = diags(np.sqrt(np.arange(1, Nr)), -1, shape=(Nr, Nr), format="csr")
         a_dag_full = kron(eye(Nq, format="csr"), a_dag, format="csr")
 
-        h_effs = self.get_h_effs(phi_ext)
+        h_effs = self.get_h_effs_12_basis(phi_ext)
         h_eff = h_effs[res_ind]
         H_0 = kron( h_eff, eye(Nr) ) + kron( eye(Nq), res.get_h_eff_sparse())
         resonator_coupling_mode_1 = self.res_couplings[res_ind][0]
@@ -708,19 +936,19 @@ class Double_Junc_Fluxonium(Device):
 
         return chi, fr, f_01
     
-    def find_chi_full_reduced(self, res_ind, N_red, phi_ext):
+    def find_chi_full_reduced_12_basis(self, res_ind, N_red, phi_ext):
         res = self.resonators[res_ind]
         Nr = res.fock_dim
 
-        H_df = self.get_h_effs(phi_ext)[res_ind]
+        H_df = self.get_h_effs_12_basis(phi_ext)[res_ind]
         df_energies, df_states  = eigsh(H_df, k=N_red, which="SA")
 
         idx = np.argsort(df_energies)
         df_energies = df_energies[idx]
         df_states = df_states[:, idx]
 
-        n_1_op = kron(eye(self.N_phi), self.get_charge_op())
-        n_2_op = kron(self.get_charge_op(), eye(self.N_phi))
+        n_1_op = kron(eye(self.N_phi), self.get_charge_op_12_basis())
+        n_2_op = kron(self.get_charge_op_12_basis(), eye(self.N_phi))
 
         n1_red = df_states.conj().T @ (n_1_op @ df_states)
         n2_red = df_states.conj().T @ (n_2_op @ df_states)
@@ -767,7 +995,7 @@ class Double_Junc_Fluxonium(Device):
 
         return chi, fr, f_01
     
-    def find_chi_full_over_flux_reduced(self, res_ind, N_red, phi_es):
+    def find_chi_full_over_flux_reduced_12_basis(self, res_ind, N_red, phi_es):
         if not hasattr(self, "res_couplings"):
             raise RuntimeError("Call add_resonator_coupling first")
         
@@ -775,7 +1003,7 @@ class Double_Junc_Fluxonium(Device):
         fqs = []
         frs = []
         for phi_ext in phi_es:
-            chi, fr, fq = self.find_chi_full_reduced(res_ind, N_red, phi_ext)
+            chi, fr, fq = self.find_chi_full_reduced_12_basis(res_ind, N_red, phi_ext)
             fqs.append(fq)
             frs.append(fr)
             chis.append(chi)
@@ -785,7 +1013,7 @@ class Double_Junc_Fluxonium(Device):
         return chis, frs, fqs
 
 
-    def find_chi_full_over_flux(self, res_ind, phi_es):
+    def find_chi_full_over_flux_12_basis(self, res_ind, phi_es):
         if not hasattr(self, "res_couplings"):
             raise RuntimeError("Call add_resonator_coupling first")
         
@@ -793,7 +1021,7 @@ class Double_Junc_Fluxonium(Device):
         fqs = []
         frs = []
         for phi_ext in phi_es:
-            chi, fr, fq = self.find_chi_full(res_ind, phi_ext)
+            chi, fr, fq = self.find_chi_full_12_basis(res_ind, phi_ext)
             fqs.append(fq)
             frs.append(fr)
             chis.append(chi)
@@ -802,7 +1030,7 @@ class Double_Junc_Fluxonium(Device):
         plt.ylabel(r'$\chi/2\pi$ (MHz)')
         return chis, frs, fqs
 
-    def get_charge_op(self):
+    def get_charge_op_12_basis(self):
         delta_phi = self.nbr_periods*2*np.pi/(self.N_phi-1)
         d1_op = diags([-np.ones(self.N_phi-1), np.ones(self.N_phi-1)], [-1, 1]) / (2*delta_phi)
         n_op = -1j * d1_op
@@ -822,8 +1050,8 @@ class Double_Junc_Fluxonium(Device):
 
         return indices, all_overlaps
     
-    def Purcell_lim_T1_sim(self, res_ind, phi_e, kappa_r):
-        H = self.get_coupled_hamiltonian(res_ind, phi_e)
+    def Purcell_lim_T1_sim_12_basis(self, res_ind, phi_e, kappa_r):
+        H = self.get_coupled_hamiltonian_12_basis(res_ind, phi_e)
         res = self.resonators[res_ind]
 
         Nq = self.N_phi ** 2
@@ -843,10 +1071,10 @@ class Double_Junc_Fluxonium(Device):
         T1 = 1/gamma
         return T1 * 10 ** (-6) # ms
     
-    def Purcell_lim_T1_analytical(self, res_ind, C_matrix, kappa_r):
+    def Purcell_lim_T1_analytical_12_basis(self, res_ind, C_matrix, kappa_r):
 
 
-        H_effs = self.get_h_effs(phi_e)
+        H_effs = self.get_h_effs_12_basis(phi_e)
         H_eff = H_effs[res_ind]
         vals, vecs = H_eff.eigenstates(eigvals=4)
         f_q = vals[1] - vals[0]
@@ -913,6 +1141,3 @@ def eigenstate_vector_to_matrix(state_vector, matrix_dim):
 
 
     
-
-
-
