@@ -18,11 +18,10 @@
   factory, plus separate transition-sweep helpers for the BO and BH
   Hamiltonians.
 - Extracted the conditional internal-mode Born-Oppenheimer analysis from
-  `Double_fluxonium_notebook.ipynb` into
-  [`conditional_bo.py`](./conditional_bo.py), where
-  `plot_conditional_bo_analysis` plots the lowest conditional bands, classical
-  and geometrically corrected potentials, and neighboring-grid ground-state
-  fidelity.
+  `Double_fluxonium_notebook.ipynb` into a standalone Python module outside
+  this repository. Its `plot_conditional_bo_analysis` function plots the
+  lowest conditional bands, classical and geometrically corrected potentials,
+  and neighboring-grid ground-state fidelity.
 
 ## 2026-10-28
 
