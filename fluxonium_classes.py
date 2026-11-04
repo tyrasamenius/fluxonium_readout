@@ -396,8 +396,11 @@ class Double_Junc_Fluxonium(Device):
 
         d1_op = diags([-np.ones(self.N_phi-1), np.ones(self.N_phi-1)], [-1, 1]) / (2*delta_phi)
         self.n_op = -1j * d1_op
+        self.nq_op = kron(self.n_op, eye(self.N_charge))
         self.n1_n2_op = kron(self.n_op, self.n_op)
-
+        self.ni_op = kron(eye(self.N_phi), diags(np.arange(-self.N_charge//2+1, self.N_charge//2 + 1)))
+        self.nq_ni_op = kron(self.nq_op, self.ni_op)
+        
         d2_op = diags([np.ones(self.N_phi-1), -2*np.ones(self.N_phi), np.ones(self.N_phi-1)], [-1, 0, 1]) / (delta_phi**2)
         self.n_sq_op = -1 * d2_op
         self.n1_squared = kron(self.n_sq_op, eye(self.N_phi))
@@ -607,6 +610,130 @@ class Double_Junc_Fluxonium(Device):
         Lterm = 1/2*self.E_L*kron(phase_sq_op, eye(N_charge))
         H = Cterm + Jterm + Lterm
         return H
+    
+    def get_h_effs_symm(self, phi_e):
+    
+            if self.eff_ECs is None:
+                raise ValueError("Effective charging energies not set")
+            
+            H_effs = []
+
+            for E_C_eff in self.eff_ECs:
+                if E_C_eff[2] != 0:
+                    raise ValueError("Junctions are not symmetric")
+                h = self.get_h_symm(E_C_eff[0], E_C_eff[1], phi_e)
+                H_effs.append(h)
+    
+            return H_effs
+    
+    def find_chi_SW(self, eigvals, eigvecs, gqr, gir, fr, nr_zpf, number_states):
+    
+            chi = 0
+    
+            nq_op = self.nq_op
+            ni_op = self.ni_op
+    
+            for state_ind in range(number_states):
+    
+                chi = chi + get_chi_ij_two_mode(
+                    0, state_ind, eigvals, eigvecs, nq_op, ni_op,
+                    gqr, gir, fr, nr_zpf
+                ) - get_chi_ij_two_mode(
+                    1, state_ind, eigvals, eigvecs, nq_op, ni_op,
+                    gqr, gir, fr, nr_zpf
+                )
+    
+            return chi
+    
+    def find_chi_over_flux_SW(self, res_ind, number_states, phi_es):
+        gqr, gir = self.res_coupling_strengths[res_ind]
+        res = self.resonators[res_ind]
+        fr = res.get_freq()
+        nr_zpf = res.get_n_zpf()
+
+        chis = []
+
+        for phi_ext in phi_es:
+            h_effs = self.get_h_effs_symm(phi_ext)
+            h_eff = h_effs[res_ind]
+            vals, vecs = eigsh(h_eff, k=number_states, which="SA")
+
+            idx = np.argsort(vals)
+            vals = vals[idx]
+            vecs = vecs[:, idx]
+    
+            chi = self.find_chi_SW(vals, vecs, gqr, gir, fr, nr_zpf, number_states)
+            chis.append(chi)
+
+        plt.plot(phi_es, chis)
+        plt.xlabel(r'$\phi_e$')
+        plt.ylabel(r'$\chi/2\pi$ (MHz)')
+
+        return chis
+
+    def find_chi_full(self, res_ind, phi_ext):
+            res = self.resonators[res_ind]
+            Nr = res.fock_dim
+            Nq = self.N_phi ** 2
+            device_dimension = self.N_phi*self.N_charge
+            a_dag = diags(np.sqrt(np.arange(1, Nr)), -1, shape=(Nr, Nr), format="csr")
+            a_dag_full = kron(eye(device_dimension, format="csr"), a_dag, format="csr")
+    
+            h_effs = self.get_h_effs_symm(phi_ext)
+            h_eff = h_effs[res_ind]
+            H_0 = kron( h_eff, eye(Nr) ) + kron( eye(device_dimension), res.get_h_eff_sparse())
+            resonator_coupling_mode_q = self.res_couplings[res_ind][0]
+            resonator_coupling_mode_i = self.res_couplings[res_ind][1]
+            H_tot = H_0 + resonator_coupling_mode_q + resonator_coupling_mode_i
+            energies, states = eigsh(H_tot, k=43, which="SA")
+    
+            idx = np.argsort(energies)
+            energies = energies[idx]
+            states = states[:, idx]
+    
+            ground_state = states[:, 0]
+            state_q1_r0 = states[:, 1] # assumes qubit frequency is below resonator
+            f_01 = energies[1]-energies[0]
+    
+            target_q0_r1 = a_dag_full @ ground_state
+            target_q0_r1 /= np.linalg.norm(target_q0_r1)
+            target_q1_r1 = a_dag_full @ state_q1_r0
+            target_q1_r1 /= np.linalg.norm(target_q1_r1)
+    
+            identified_state_ids, all_overlaps = self.identify_state_index([target_q0_r1, target_q1_r1], states)
+            state_id_q0_r1 = identified_state_ids[0]
+            state_id_q1_r1 = identified_state_ids[1]
+            f01_plus_chi = energies[state_id_q1_r1]-energies[state_id_q0_r1]
+            for i in range(len(energies)):
+                print(
+                    i,
+                    energies[i] - energies[0],
+                    all_overlaps[0][i],  # q0,r1 target
+                    all_overlaps[1][i]   # q1,r1 target
+                )
+    
+            fr = energies[state_id_q0_r1] - energies[0]
+            
+            chi = (f01_plus_chi - f_01)*10**3
+    
+            return chi, fr, f_01
+    
+    def find_chi_full_over_flux(self, res_ind, phi_es):
+            if not hasattr(self, "res_couplings"):
+                raise RuntimeError("Call add_resonator_coupling first")
+            
+            chis = []
+            fqs = []
+            frs = []
+            for phi_ext in phi_es:
+                chi, fr, fq = self.find_chi_full(res_ind, phi_ext)
+                fqs.append(fq)
+                frs.append(fr)
+                chis.append(chi)
+            plt.plot(phi_es, chis)
+            plt.xlabel(r'$\phi_e$')
+            plt.ylabel(r'$\chi/2\pi$ (MHz)')
+            return chis, frs, fqs
 
     def get_h_12_basis(self, E_C1, E_C2, g_12, phi_e):
         phi1, phi2 = np.meshgrid(self.phi_vals,self. phi_vals, indexing="ij")
@@ -798,6 +925,56 @@ class Double_Junc_Fluxonium(Device):
         plt.xlabel('$\Phi_e/\Phi_0$')
         plt.ylabel('$E-E_0$ (GHz)')
         plt.legend()
+
+    def add_resonator_coupling(self, resonators, capacitance_matrices):
+            
+            if len(resonators) != len(capacitance_matrices):
+                print('Number of resonators and couplings need to match')
+                return 
+            
+            self.resonators = resonators
+            eff_ECs = []
+            res_coupling_strengths = []
+            res_couplings = []
+    
+            for res, cap_mat in zip(resonators, capacitance_matrices):
+                inv_cap_mat = np.linalg.inv(cap_mat)
+                E_Cq = inv_cap_mat[0,0]/2 * self.unit_fF_inv_to_GHz
+                E_Ci = inv_cap_mat[1,1]/2 * self.unit_fF_inv_to_GHz
+                E_Cr = inv_cap_mat[2,2]/2 * self.unit_fF_inv_to_GHz
+                gqr = 2*(inv_cap_mat[0,2] + inv_cap_mat[2,0]) * self.unit_fF_inv_to_GHz
+                gir = 2*(inv_cap_mat[1,2] + inv_cap_mat[2,1]) * self.unit_fF_inv_to_GHz
+                gqi = 2*(inv_cap_mat[1,0] + inv_cap_mat[0,1]) * self.unit_fF_inv_to_GHz
+    
+                res.set_E_C_eff(E_Cr)
+                eff_EC_array = np.array([E_Cq, E_Ci, gqi])
+                eff_ECs.append(eff_EC_array)
+    
+                res_coupling_strength_array = np.array([gqr, gir])
+                res_coupling_strengths.append(res_coupling_strength_array)
+                res_coupling_mode_q = gqr * kron(self.nq_op, res.get_charge_op_sparse())
+                res_coupling_mode_i = gir * kron(self.ni_op, res.get_charge_op_sparse())
+                res_couplings.append(np.array([res_coupling_mode_q, res_coupling_mode_i]))
+    
+            self.eff_ECs = eff_ECs
+            self.res_coupling_strengths = res_coupling_strengths
+            self.res_couplings = res_couplings
+            return E_Cr, E_Cq, E_Ci, gqr, gir, gqi
+
+    def get_coupled_hamiltonian_symm(self, res_ind, phi_e):
+            """Build the iq-basis device-resonator Hamiltonian for one resonator."""
+            resonator = self.resonators[res_ind]
+            device_dimension = self.N_phi*self.N_charge
+            h_eff = self.get_h_effs_symm(phi_e)[res_ind]
+            h_uncoupled = (
+                kron(h_eff, eye(resonator.fock_dim))
+                + kron(
+                    eye(device_dimension),
+                    resonator.get_h_eff_sparse(),
+                )
+            )
+            coupling = sum(self.res_couplings[res_ind])
+            return h_uncoupled + coupling
 
     def add_resonator_coupling_12_basis(self, resonators, capacitance_matrices):
         
