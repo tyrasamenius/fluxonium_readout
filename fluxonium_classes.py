@@ -646,6 +646,7 @@ class Double_Junc_Fluxonium(Device):
             return chi
     
     def find_chi_over_flux_SW(self, res_ind, number_states, phi_es):
+        """Return the SW chi sweep in MHz without creating a plot."""
         gqr, gir = self.res_coupling_strengths[res_ind]
         res = self.resonators[res_ind]
         fr = res.get_freq()
@@ -664,10 +665,6 @@ class Double_Junc_Fluxonium(Device):
     
             chi = self.find_chi_SW(vals, vecs, gqr, gir, fr, nr_zpf, number_states)
             chis.append(chi)
-
-        plt.plot(phi_es, chis)
-        plt.xlabel(r'$\phi_e$')
-        plt.ylabel(r'$\chi/2\pi$ (MHz)')
 
         return chis
 
@@ -719,6 +716,7 @@ class Double_Junc_Fluxonium(Device):
             return chi, fr, f_01
     
     def find_chi_full_over_flux(self, res_ind, phi_es):
+            """Return full-model chi, resonator frequency, and qubit frequency sweeps."""
             if not hasattr(self, "res_couplings"):
                 raise RuntimeError("Call add_resonator_coupling first")
             
@@ -730,9 +728,6 @@ class Double_Junc_Fluxonium(Device):
                 fqs.append(fq)
                 frs.append(fr)
                 chis.append(chi)
-            plt.plot(phi_es, chis)
-            plt.xlabel(r'$\phi_e$')
-            plt.ylabel(r'$\chi/2\pi$ (MHz)')
             return chis, frs, fqs
 
     def get_h_12_basis(self, E_C1, E_C2, g_12, phi_e):
