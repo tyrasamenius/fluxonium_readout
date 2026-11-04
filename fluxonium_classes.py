@@ -1221,6 +1221,46 @@ class Double_Junc_Fluxonium(Device):
             all_overlaps.append(overlaps)
 
         return indices, all_overlaps
+
+    def Purcell_lim_T1_sim(self, res_ind, phi_e, kappa_r):
+            H = self.get_coupled_hamiltonian_symm(res_ind, phi_e)
+            res = self.resonators[res_ind]
+    
+            device_dimension = self.N_phi*self.N_charge
+            a_op = kron(eye(device_dimension), destroy(res.fock_dim, format="csr"))
+    
+            vals, vecs = eigsh(H, k=2, which="SA")
+    
+            idx = np.argsort(vals)
+            vals = vals[idx]
+            vecs = vecs[:, idx]
+    
+            g_state = vecs[:, 0]
+            e_state = vecs[:, 1] # assuming f_q < f_r, f_int
+    
+            gamma = kappa_r*np.abs(g_state.conj() @ (a_op @ e_state))**2
+            
+            T1 = 1/gamma
+            return T1 * 10 ** (-6) # ms
+
+    def Purcell_lim_T1_analytical(self, res_ind, phi_e, kappa_r):
+    
+            H_effs = self.get_h_effs_symm(phi_e)
+            H_eff = H_effs[res_ind]
+            vals, vecs = H_eff.eigenstates(eigvals=4)
+            f_q = vals[1] - vals[0]
+    
+            res = self.resonators[res_ind]
+            f_r = res.freq
+    
+            delta = f_r - f_q
+    
+            g_charge_charge = self.res_coupling_strengths[res_ind]
+            g = g_charge_charge * ( self.get_n_zpf(phi_e) * res.get_n_zpf())
+    
+            gamma = kappa_r*np.abs(g/delta)**2
+            T1 = 1/gamma * 10 ** (-6) # ms
+            return T1
     
     def Purcell_lim_T1_sim_12_basis(self, res_ind, phi_e, kappa_r):
         H = self.get_coupled_hamiltonian_12_basis(res_ind, phi_e)
