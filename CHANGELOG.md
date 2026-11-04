@@ -1,5 +1,11 @@
 # Change log
 
+## 2026-11-04
+
+- Removed the two-junction phase-basis methods and their dedicated operators
+  from `Double_Junc_Fluxonium`; the notebook no longer includes cells that call
+  the removed API.
+
 ## 2026-11-03
 
 - Fixed `Ecs_from_caps_qir` in `Double_fluxonium_notebook.ipynb` to invert the
