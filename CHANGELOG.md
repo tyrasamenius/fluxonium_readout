@@ -2,6 +2,17 @@
 
 ## 2026-11-04
 
+- Seeded full-model dispersive-state identification at the flux point nearest
+  pi and track the resonator and qubit branches by neighboring-point overlap.
+  The full-model sweep now accepts an eigenstate truncation and errors when
+  the best state overlap is too small to support reliable tracking.
+- Extended `Double_Junc_Fluxonium.identify_state_index` to exclude previously
+  assigned eigenstates and enforce a minimum overlap during state tracking.
+- Added a full coupled-spectrum plot over external flux with overlap-tracked
+  resonator, qubit, and joint qubit-resonator states highlighted.
+- Added an effective resonator-frequency getter and used it consistently in
+  the q-i SW and full calculations; the SW dispersive pull now follows the
+  full-model convention `f_r|1 - f_r|0`.
 - Removed the two-junction phase-basis methods and their dedicated operators
   from `Double_Junc_Fluxonium`; the notebook no longer includes cells that call
   the removed API.
