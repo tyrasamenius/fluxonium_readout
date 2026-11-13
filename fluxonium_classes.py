@@ -636,14 +636,15 @@ class Double_Junc_Fluxonium(Device):
             N_levels,
         )
 
-    def charge_dispersion_sweep(self, ratio_values = np.linspace(1, 30, 25), EC_values = [0.5, 1.0, 1.5], ng_values = np.linspace(0, 0.5, 21), n_levels = 4):
+    def charge_dispersion_sweep(self, ratio_values = np.linspace(1, 30, 25), EC_values = [0.5, 1.0, 1.5], C_shunt=0, ng_values = np.linspace(0, 0.5, 21), n_levels = 4):
 
         mediator_dispersion = np.zeros((len(EC_values), len(ratio_values)))
         qubit_dispersion = np.zeros((len(EC_values), len(ratio_values)))
+        qubit_0_frequencies = np.zeros((len(EC_values), len(ratio_values)))
 
         for i, ECJ in enumerate(EC_values):
             CJ = ECJ_to_CJ(ECJ)
-            E_cq, E_ci = Ecs_from_caps_qi(CJ, CJ, 0)
+            E_cq, E_ci = Ecs_from_caps_qi(CJ, CJ, C_shunt)
 
             for j, r in enumerate(ratio_values):
                 E_J = ECJ * r
@@ -681,6 +682,8 @@ class Double_Junc_Fluxonium(Device):
                     qubit_frequencies.append(
                         energies[1] - energies[0]
                     )
+                    if ng == 0:
+                        qubit_0_frequencies[i, j] = energies[1] - energies[0]
                 mediator_dispersion[i, j] = (
                     np.max(mediator_frequencies)
                     - np.min(mediator_frequencies)
@@ -689,7 +692,7 @@ class Double_Junc_Fluxonium(Device):
                     np.max(qubit_frequencies)
                     - np.min(qubit_frequencies)
                 )
-        return ratio_values, EC_values, qubit_dispersion, mediator_dispersion
+        return ratio_values, EC_values, qubit_dispersion, mediator_dispersion, qubit_0_frequencies
 
     def get_h_symm(self, E_Cq, E_Ci, phi_e, ng = 0):
         N_charge = self.N_charge
