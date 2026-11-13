@@ -636,13 +636,68 @@ class Double_Junc_Fluxonium(Device):
             N_levels,
         )
 
+    def charge_dispersion_sweep(self, ratio_values = np.linspace(1, 30, 25), EC_values = [0.5, 1.0, 1.5], ng_values = np.linspace(0, 0.5, 21), n_levels = 2):
+
+        mediator_dispersion = np.zeros((len(EC_values), len(ratio_values)))
+        qubit_dispersion = np.zeros((len(EC_values), len(ratio_values)))
+
+        for i, ECJ in enumerate(EC_values):
+            CJ = ECJ_to_CJ(ECJ)
+            E_cq, E_ci = Ecs_from_caps_qi(CJ, CJ, 0)
+
+            for j, r in enumerate(ratio_values):
+                E_J = ECJ * r
+                self.E_J1 = E_J
+                self.E_J2 = E_J
+
+                qubit_frequencies = []
+                mediator_frequencies = []
+
+                for ng in ng_values:
+                    H = self.get_h_symm(E_cq, E_ci, np.pi, ng)
+
+                    energies, states = eigsh(
+                        H,
+                        k=n_levels,
+                        which="SA",
+                        return_eigenvectors=True,
+                    )
+
+                    order = np.argsort(energies)
+                    energies = energies[order]
+                    states = states[:, order]
+
+                    ground = states[:, 0]
+
+                    mediator_strength = np.abs(
+                        ground.conj() @ (self.ni_op @ states[:, 1:])
+                    ) ** 2
+                    mediator_state = 1 + np.argmax(mediator_strength)
+
+                    mediator_frequencies.append(
+                        energies[mediator_state] - energies[0]
+                    )
+
+                    qubit_frequencies.append(
+                        energies[1] - energies[0]
+                    )
+                mediator_dispersion[i, j] = (
+                    np.max(mediator_frequencies)
+                    - np.min(mediator_frequencies)
+                )
+                qubit_dispersion[i, j] = (
+                    np.max(qubit_frequencies)
+                    - np.min(qubit_frequencies)
+                )
+        return ratio_values, EC_values, qubit_dispersion, mediator_dispersion
+
     def get_h_symm(self, E_Cq, E_Ci, phi_e, ng = 0):
         N_charge = self.N_charge
         n_vals = np.arange(-N_charge//2+1, N_charge//2 + 1)
         ni_squared = kron(eye(self.N_phi), (diags(n_vals ) - ng*eye(N_charge))**2)
         nq_squared = kron(self.n_sq_op, eye(N_charge))
         Cterm = 4 * E_Cq * nq_squared + 4 * E_Ci * ni_squared 
-        cos_phase_over_2_op = diags(np.abs(np.cos(1/2*self.phi_vals_symm)))
+        cos_phase_over_2_op = diags(np.cos(1/2*self.phi_vals_symm))
         cos_q_op = kron(cos_phase_over_2_op, eye(N_charge))
         cos_i_op = kron(eye(self.N_phi), diags([np.ones(N_charge-1), np.ones(N_charge-1)], [-1, 1])/2)
 
@@ -1194,7 +1249,25 @@ def get_chi_ij_two_mode(i, j, eigenergies, eigstates, n1_op, n2_op, g1r, g2r, fr
 
     return chi_ij
 
+def Ecs_from_caps_qi(CJ1, CJ2, C_shunt):
 
+    C_tot = CJ1 + CJ2
+
+    E_cq = 1/2/(CJ1*(CJ2)/C_tot+C_shunt) * unit_fF_inv_to_GHz
+
+    E_ci = 1/(2*C_tot) * unit_fF_inv_to_GHz
+
+    return E_cq, E_ci
+
+def ECJ_to_CJ(E_cj):
+    return 1/(2*E_cj/unit_fF_inv_to_GHz)
+
+e = 1.602*10**(-19)
+h = 6.626*10**(-34)
+hbar = h/(2*np.pi)
+phi_0 = h/(2*e)
+unit_fF_inv_to_GHz = e**2 /h * 10**6
+unit_nH_inv_to_GHz = 1/h * (phi_0/(2*np.pi))**2
 
 
     
