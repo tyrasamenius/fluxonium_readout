@@ -1,5 +1,15 @@
 # Change log
 
+## 2026-11-13
+
+- Fixed `Double_Junc_Fluxonium.charge_dispersion_sweep` to apply each
+  `E_J/E_CJ` ratio to both junction Josephson energies.
+
+## 2026-11-09
+
+- Added `Double_Junc_Fluxonium.plot_corrected_potentials_symm` to compare the
+  classical, BO-corrected, and BO+BH-corrected slow-mode potentials.
+
 ## 2026-11-04
 
 - Seeded full-model dispersive-state identification at the flux point nearest

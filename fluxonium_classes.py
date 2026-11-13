@@ -636,7 +636,7 @@ class Double_Junc_Fluxonium(Device):
             N_levels,
         )
 
-    def charge_dispersion_sweep(self, ratio_values = np.linspace(1, 30, 25), EC_values = [0.5, 1.0, 1.5], ng_values = np.linspace(0, 0.5, 21), n_levels = 2):
+    def charge_dispersion_sweep(self, ratio_values = np.linspace(1, 30, 25), EC_values = [0.5, 1.0, 1.5], ng_values = np.linspace(0, 0.5, 21), n_levels = 4):
 
         mediator_dispersion = np.zeros((len(EC_values), len(ratio_values)))
         qubit_dispersion = np.zeros((len(EC_values), len(ratio_values)))
