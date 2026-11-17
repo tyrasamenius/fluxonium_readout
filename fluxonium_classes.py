@@ -362,7 +362,8 @@ class Double_Junc_Fluxonium(Device):
                    E_L, # GHz
                    resonators = None, 
                    delta_phi = 0.15, 
-                   nbr_periods = 6):
+                   nbr_periods = 6,
+                   N_charge = 11):
         self.nbr_periods = nbr_periods
         self.E_J1 = E_J1
         self.E_J2 = E_J2
@@ -376,7 +377,7 @@ class Double_Junc_Fluxonium(Device):
         self.eff_ECs = None
         self.res_coupling_strengths = None
         self.res_couplings = None
-        self.N_charge = 11
+        self.N_charge = N_charge
 
         self.phi_vals_symm = np.arange(-nbr_periods*np.pi, nbr_periods*np.pi+delta_phi, delta_phi)
         self.N_phi = len(self.phi_vals_symm)
@@ -517,6 +518,63 @@ class Double_Junc_Fluxonium(Device):
         quantum_metric = np.sum(np.abs(A_a0)**2, axis=1)
         return diags(4 * E_Cq * quantum_metric)
 
+    def plot_corrected_potentials_symm(
+        self, E_Cq, E_Ci, phi_e, phi_vals=None, N_charge=41, ax=None, show_clasical=True, show_BO=True, show_BH=True
+    ):
+        """Plot the classical, BO-corrected, and BO+BH-corrected potentials."""
+        if phi_vals is None:
+            phi_vals = self.phi_vals_symm
+        phi_vals = np.asarray(phi_vals, dtype=float)
+
+        classical = self.get_classical_approximation_symm(
+            phi_e, phi_vals=phi_vals
+        ).diagonal()
+        bo_correction = self.get_BO_correction_symm(
+            E_Ci, phi_vals=phi_vals, N_charge=N_charge
+        ).diagonal()
+        bh_correction = self.get_BH_correction_symm(
+            E_Cq, E_Ci, phi_vals=phi_vals, N_charge=N_charge
+        ).diagonal()
+
+        if ax is None:
+            fig, ax = plt.subplots()
+        else:
+            fig = ax.get_figure()
+
+        if show_clasical:
+            ax.plot(phi_vals, classical, label="Classical", color = "pink")
+        if show_BO:
+            ax.plot(
+                phi_vals,
+                classical + bo_correction,
+                label="BO corrected", color = "red"
+            )
+        if show_BH:
+            ax.plot(
+                phi_vals,
+                classical + bo_correction + bh_correction,
+                label="BO + BH corrected", color = "green"
+            )
+        n_min = int(np.ceil(phi_vals.min() / np.pi))
+        n_max = int(np.floor(phi_vals.max() / np.pi))
+
+        ticks = np.arange(n_min, n_max + 1) * np.pi
+
+        labels = [
+            "0" if i == 0 else
+            r"$\pi$" if i == 1 else
+            r"$-\pi$" if i == -1 else
+            rf"${i}\pi$"
+            for i in range(n_min, n_max + 1)
+        ]
+
+        ax.set_xticks(ticks)
+        ax.set_xticklabels(labels)
+        ax.set_xlabel(r"$\phi_q$")
+        ax.set_ylabel("Potential energy (GHz)")
+        ax.legend()
+        return fig, ax
+
     def BO_h_symm(self, E_Cq, E_Ci, phi_e, N_charge=41):
         """Build the single-band reduced Hamiltonian with the exact BO potential."""
         return (
@@ -578,11 +636,126 @@ class Double_Junc_Fluxonium(Device):
             N_levels,
         )
 
-    def get_h_symm(self, E_Cq, E_Ci, phi_e):
+    def charge_dispersion_sweep(self, ratio_values = np.linspace(1, 30, 25), EC_values = [0.5, 1.0, 1.5], phi_e=np.pi, C_shunt=0, ng_values = np.linspace(0, 0.5, 21), n_levels = 4):
+
+        mediator_dispersion = np.zeros((len(EC_values), len(ratio_values)))
+        qubit_dispersion = np.zeros((len(EC_values), len(ratio_values)))
+        qubit_0_frequencies = np.zeros((len(EC_values), len(ratio_values)))
+
+        for i, ECJ in enumerate(EC_values):
+            CJ = ECJ_to_CJ(ECJ)
+            E_cq, E_ci = Ecs_from_caps_qi(CJ, CJ, C_shunt)
+
+            for j, r in enumerate(ratio_values):
+                E_J = ECJ * r
+                self.E_J1 = E_J
+                self.E_J2 = E_J
+
+                qubit_frequencies = []
+                mediator_frequencies = []
+
+                for ng in ng_values:
+                    H = self.get_h_symm(E_cq, E_ci, phi_e, ng)
+
+                    energies, states = eigsh(
+                        H,
+                        k=n_levels,
+                        which="SA",
+                        return_eigenvectors=True,
+                    )
+
+                    order = np.argsort(energies)
+                    energies = energies[order]
+                    states = states[:, order]
+
+                    ground = states[:, 0]
+
+                    mediator_strength = np.abs(
+                        ground.conj() @ (self.ni_op @ states[:, 1:])
+                    ) ** 2
+                    mediator_state = 1 + np.argmax(mediator_strength)
+
+                    mediator_frequencies.append(
+                        energies[mediator_state] - energies[0]
+                    )
+
+                    qubit_frequencies.append(
+                        energies[1] - energies[0]
+                    )
+                    if ng == 0:
+                        qubit_0_frequencies[i, j] = energies[1] - energies[0]
+                mediator_dispersion[i, j] = (
+                    np.max(mediator_frequencies)
+                    - np.min(mediator_frequencies)
+                )
+                qubit_dispersion[i, j] = (
+                    np.max(qubit_frequencies)
+                    - np.min(qubit_frequencies)
+                )
+        return ratio_values, EC_values, qubit_dispersion, mediator_dispersion, qubit_0_frequencies
+    
+    def charge_dispersion_EJ_over_EL_sweep(self, ratio_values = np.linspace(1.5, 15, 25), EL_values = [1, 2, 3], phi_e=np.pi, CJ=19, C_shunt=0, ng_values = np.linspace(0, 0.5, 21), n_levels = 4):
+    
+            mediator_dispersion = np.zeros((len(EL_values), len(ratio_values)))
+            qubit_dispersion = np.zeros((len(EL_values), len(ratio_values)))
+            qubit_0_frequencies = np.zeros((len(EL_values), len(ratio_values)))
+    
+            for i, EL in enumerate(EL_values):
+                self.E_L = EL
+                E_cq, E_ci = Ecs_from_caps_qi(CJ, CJ, C_shunt)
+    
+                for j, r in enumerate(ratio_values):
+                    E_J = EL * r
+                    self.E_J1 = E_J
+                    self.E_J2 = E_J
+    
+                    qubit_frequencies = []
+                    mediator_frequencies = []
+    
+                    for ng in ng_values:
+                        H = self.get_h_symm(E_cq, E_ci, phi_e, ng)
+    
+                        energies, states = eigsh(
+                            H,
+                            k=n_levels,
+                            which="SA",
+                            return_eigenvectors=True,
+                        )
+    
+                        order = np.argsort(energies)
+                        energies = energies[order]
+                        states = states[:, order]
+    
+                        ground = states[:, 0]
+    
+                        mediator_strength = np.abs(
+                            ground.conj() @ (self.ni_op @ states[:, 1:])
+                        ) ** 2
+                        mediator_state = 1 + np.argmax(mediator_strength)
+    
+                        mediator_frequencies.append(
+                            energies[mediator_state] - energies[0]
+                        )
+    
+                        qubit_frequencies.append(
+                            energies[1] - energies[0]
+                        )
+                        if ng == 0:
+                            qubit_0_frequencies[i, j] = energies[1] - energies[0]
+                    mediator_dispersion[i, j] = (
+                        np.max(mediator_frequencies)
+                        - np.min(mediator_frequencies)
+                    )
+                    qubit_dispersion[i, j] = (
+                        np.max(qubit_frequencies)
+                        - np.min(qubit_frequencies)
+                    )
+            return ratio_values, EL_values, qubit_dispersion, mediator_dispersion, qubit_0_frequencies
+    
+    def get_h_symm(self, E_Cq, E_Ci, phi_e, ng = 0):
         N_charge = self.N_charge
         n_vals = np.arange(-N_charge//2+1, N_charge//2 + 1)
-        ni_squared = kron(eye(self.N_phi), diags(n_vals )**2)
-        
+        ni_squared = kron(eye(self.N_phi), (diags(n_vals ) - ng*eye(N_charge))**2)
         nq_squared = kron(self.n_sq_op, eye(N_charge))
         Cterm = 4 * E_Cq * nq_squared + 4 * E_Ci * ni_squared 
         cos_phase_over_2_op = diags(np.cos(1/2*self.phi_vals_symm))
@@ -866,8 +1039,8 @@ class Double_Junc_Fluxonium(Device):
         ax.legend()
         return fig, ax
     
-    def eigenstates_symm(self, E_Cq, E_Ci, phi_e, N_levels = 5):
-        H = self.get_h_symm(E_Cq, E_Ci, phi_e)
+    def eigenstates_symm(self, E_Cq, E_Ci, phi_e, N_levels = 5, ng=0):
+        H = self.get_h_symm(E_Cq, E_Ci, phi_e,ng=ng)
         vals, vecs = eigsh(H, k = max(N_levels, 15), which="SA")
 
         idx = np.argsort(vals)
@@ -875,20 +1048,20 @@ class Double_Junc_Fluxonium(Device):
         vecs = vecs[:, idx]
         return vals, vecs
 
-    def plot_wavefuncs_symm(self, E_Cq, E_Ci, nbr_wavfuncs, phi_e):
+    def plot_wavefuncs_symm(self, E_Cq, E_Ci, nbr_wavfuncs, phi_e, ng = 0):
         return self._plot_wavefuncs_symm(
-            E_Cq, E_Ci, nbr_wavfuncs, phi_e, plot_probability=True
+            E_Cq, E_Ci, nbr_wavfuncs, phi_e, plot_probability=True, ng = ng
         )
 
-    def plot_wavefuncs_real_symm(self, E_Cq, E_Ci, nbr_wavfuncs, phi_e):
+    def plot_wavefuncs_real_symm(self, E_Cq, E_Ci, nbr_wavfuncs, phi_e, ng = 0):
         return self._plot_wavefuncs_symm(
-            E_Cq, E_Ci, nbr_wavfuncs, phi_e, plot_probability=False
+            E_Cq, E_Ci, nbr_wavfuncs, phi_e, plot_probability=False, ng = ng
         )
 
     def _plot_wavefuncs_symm(
-        self, E_Cq, E_Ci, nbr_wavfuncs, phi_e, plot_probability
+        self, E_Cq, E_Ci, nbr_wavfuncs, phi_e, plot_probability, ng = 0
     ):
-        vals, vecs = self.eigenstates_symm(E_Cq, E_Ci, phi_e, N_levels=nbr_wavfuncs)
+        vals, vecs = self.eigenstates_symm(E_Cq, E_Ci, phi_e, N_levels=nbr_wavfuncs, ng = ng)
 
         N_charge = self.N_charge
 
@@ -958,12 +1131,12 @@ class Double_Junc_Fluxonium(Device):
         plt.show()
         return fig, axes
 
-    def plot_transitions_over_flux_symm(self, E_Cq, E_Ci, phi_es, N_levels):
+    def plot_transitions_over_flux_symm(self, E_Cq, E_Ci, phi_es, N_levels, ng=0):
         N_flux = len(phi_es)
         energy_over_flux_mat = np.empty((N_flux, N_levels))
 
         for phi_e_idx, phi_e in enumerate(phi_es):
-            vals, vecs = self.eigenstates_symm(E_Cq, E_Ci, phi_e, N_levels = N_levels)
+            vals, vecs = self.eigenstates_symm(E_Cq, E_Ci, phi_e, N_levels = N_levels, ng=ng)
             for i in range(1, N_levels):
                 energy_over_flux_mat[phi_e_idx, i] = vals[i] - vals[0]
 
@@ -1137,7 +1310,25 @@ def get_chi_ij_two_mode(i, j, eigenergies, eigstates, n1_op, n2_op, g1r, g2r, fr
 
     return chi_ij
 
+def Ecs_from_caps_qi(CJ1, CJ2, C_shunt):
 
+    C_tot = CJ1 + CJ2
+
+    E_cq = 1/2/(CJ1*(CJ2)/C_tot+C_shunt) * unit_fF_inv_to_GHz
+
+    E_ci = 1/(2*C_tot) * unit_fF_inv_to_GHz
+
+    return E_cq, E_ci
+
+def ECJ_to_CJ(E_cj):
+    return 1/(2*E_cj/unit_fF_inv_to_GHz)
+
+e = 1.602*10**(-19)
+h = 6.626*10**(-34)
+hbar = h/(2*np.pi)
+phi_0 = h/(2*e)
+unit_fF_inv_to_GHz = e**2 /h * 10**6
+unit_nH_inv_to_GHz = 1/h * (phi_0/(2*np.pi))**2
 
 
     
