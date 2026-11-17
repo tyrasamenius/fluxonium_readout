@@ -636,7 +636,7 @@ class Double_Junc_Fluxonium(Device):
             N_levels,
         )
 
-    def charge_dispersion_sweep(self, ratio_values = np.linspace(1, 30, 25), EC_values = [0.5, 1.0, 1.5], C_shunt=0, ng_values = np.linspace(0, 0.5, 21), n_levels = 4):
+    def charge_dispersion_sweep(self, ratio_values = np.linspace(1, 30, 25), EC_values = [0.5, 1.0, 1.5], phi_e=np.pi, C_shunt=0, ng_values = np.linspace(0, 0.5, 21), n_levels = 4):
 
         mediator_dispersion = np.zeros((len(EC_values), len(ratio_values)))
         qubit_dispersion = np.zeros((len(EC_values), len(ratio_values)))
@@ -655,7 +655,7 @@ class Double_Junc_Fluxonium(Device):
                 mediator_frequencies = []
 
                 for ng in ng_values:
-                    H = self.get_h_symm(E_cq, E_ci, np.pi, ng)
+                    H = self.get_h_symm(E_cq, E_ci, phi_e, ng)
 
                     energies, states = eigsh(
                         H,
@@ -693,7 +693,65 @@ class Double_Junc_Fluxonium(Device):
                     - np.min(qubit_frequencies)
                 )
         return ratio_values, EC_values, qubit_dispersion, mediator_dispersion, qubit_0_frequencies
-
+    
+    def charge_dispersion_EJ_over_EL_sweep(self, ratio_values = np.linspace(1.5, 15, 25), EL_values = [1, 2, 3], phi_e=np.pi, CJ=19, C_shunt=0, ng_values = np.linspace(0, 0.5, 21), n_levels = 4):
+    
+            mediator_dispersion = np.zeros((len(EL_values), len(ratio_values)))
+            qubit_dispersion = np.zeros((len(EL_values), len(ratio_values)))
+            qubit_0_frequencies = np.zeros((len(EL_values), len(ratio_values)))
+    
+            for i, EL in enumerate(EL_values):
+                self.E_L = EL
+                E_cq, E_ci = Ecs_from_caps_qi(CJ, CJ, C_shunt)
+    
+                for j, r in enumerate(ratio_values):
+                    E_J = EL * r
+                    self.E_J1 = E_J
+                    self.E_J2 = E_J
+    
+                    qubit_frequencies = []
+                    mediator_frequencies = []
+    
+                    for ng in ng_values:
+                        H = self.get_h_symm(E_cq, E_ci, phi_e, ng)
+    
+                        energies, states = eigsh(
+                            H,
+                            k=n_levels,
+                            which="SA",
+                            return_eigenvectors=True,
+                        )
+    
+                        order = np.argsort(energies)
+                        energies = energies[order]
+                        states = states[:, order]
+    
+                        ground = states[:, 0]
+    
+                        mediator_strength = np.abs(
+                            ground.conj() @ (self.ni_op @ states[:, 1:])
+                        ) ** 2
+                        mediator_state = 1 + np.argmax(mediator_strength)
+    
+                        mediator_frequencies.append(
+                            energies[mediator_state] - energies[0]
+                        )
+    
+                        qubit_frequencies.append(
+                            energies[1] - energies[0]
+                        )
+                        if ng == 0:
+                            qubit_0_frequencies[i, j] = energies[1] - energies[0]
+                    mediator_dispersion[i, j] = (
+                        np.max(mediator_frequencies)
+                        - np.min(mediator_frequencies)
+                    )
+                    qubit_dispersion[i, j] = (
+                        np.max(qubit_frequencies)
+                        - np.min(qubit_frequencies)
+                    )
+            return ratio_values, EL_values, qubit_dispersion, mediator_dispersion, qubit_0_frequencies
+    
     def get_h_symm(self, E_Cq, E_Ci, phi_e, ng = 0):
         N_charge = self.N_charge
         n_vals = np.arange(-N_charge//2+1, N_charge//2 + 1)
@@ -992,12 +1050,12 @@ class Double_Junc_Fluxonium(Device):
 
     def plot_wavefuncs_symm(self, E_Cq, E_Ci, nbr_wavfuncs, phi_e, ng = 0):
         return self._plot_wavefuncs_symm(
-            E_Cq, E_Ci, nbr_wavfuncs, phi_e, plot_probability=True, ng = 0
+            E_Cq, E_Ci, nbr_wavfuncs, phi_e, plot_probability=True, ng = ng
         )
 
     def plot_wavefuncs_real_symm(self, E_Cq, E_Ci, nbr_wavfuncs, phi_e, ng = 0):
         return self._plot_wavefuncs_symm(
-            E_Cq, E_Ci, nbr_wavfuncs, phi_e, plot_probability=False, ng = 0
+            E_Cq, E_Ci, nbr_wavfuncs, phi_e, plot_probability=False, ng = ng
         )
 
     def _plot_wavefuncs_symm(
