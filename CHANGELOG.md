@@ -1,5 +1,17 @@
 # Change log
 
+## 2026-11-17
+
+- Added shared internal-mode charge-operator state identification and used it
+  to exclude the mediator when selecting the qubit state in charge-dispersion
+  and full-model dispersive calculations. The full model now identifies the
+  resonator at each flux and assigns the lowest remaining excited state to the
+  qubit. Flux points where state identification fails are now returned as
+  `NaN` gaps in sweeps instead of aborting the sweep. The double-junction
+  Schrieffer-Wolff calculation now uses the lowest non-mediator state as qubit
+  1. Fixed full-spectrum sweeps to retain spectra at successfully evaluated
+  flux points.
+
 ## 2026-11-13
 
 - Fixed `Double_Junc_Fluxonium.charge_dispersion_sweep` to apply each
