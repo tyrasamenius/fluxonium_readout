@@ -2,6 +2,7 @@ import numpy as np
 from qutip import *
 import matplotlib.pyplot as plt
 import math
+import warnings
 from scipy.sparse import kron, eye, diags
 from scipy.sparse.linalg import eigsh
 
@@ -670,20 +671,24 @@ class Double_Junc_Fluxonium(Device):
 
                     ground = states[:, 0]
 
-                    mediator_strength = np.abs(
-                        ground.conj() @ (self.ni_op @ states[:, 1:])
-                    ) ** 2
-                    mediator_state = 1 + np.argmax(mediator_strength)
+                    mediator_state = self.identify_mediator_state_index(
+                        ground, states, excluded_indices=[0]
+                    )
+                    qubit_state = next(
+                        state_index
+                        for state_index in range(1, n_levels)
+                        if state_index != mediator_state
+                    )
 
                     mediator_frequencies.append(
                         energies[mediator_state] - energies[0]
                     )
 
                     qubit_frequencies.append(
-                        energies[1] - energies[0]
+                        energies[qubit_state] - energies[0]
                     )
                     if ng == 0:
-                        qubit_0_frequencies[i, j] = energies[1] - energies[0]
+                        qubit_0_frequencies[i, j] = energies[qubit_state] - energies[0]
                 mediator_dispersion[i, j] = (
                     np.max(mediator_frequencies)
                     - np.min(mediator_frequencies)
@@ -728,20 +733,24 @@ class Double_Junc_Fluxonium(Device):
     
                         ground = states[:, 0]
     
-                        mediator_strength = np.abs(
-                            ground.conj() @ (self.ni_op @ states[:, 1:])
-                        ) ** 2
-                        mediator_state = 1 + np.argmax(mediator_strength)
-    
+                        mediator_state = self.identify_mediator_state_index(
+                            ground, states, excluded_indices=[0]
+                        )
+                        qubit_state = next(
+                            state_index
+                            for state_index in range(1, n_levels)
+                            if state_index != mediator_state
+                        )
+
                         mediator_frequencies.append(
                             energies[mediator_state] - energies[0]
                         )
-    
+
                         qubit_frequencies.append(
-                            energies[1] - energies[0]
+                            energies[qubit_state] - energies[0]
                         )
                         if ng == 0:
-                            qubit_0_frequencies[i, j] = energies[1] - energies[0]
+                            qubit_0_frequencies[i, j] = energies[qubit_state] - energies[0]
                     mediator_dispersion[i, j] = (
                         np.max(mediator_frequencies)
                         - np.min(mediator_frequencies)
@@ -751,6 +760,24 @@ class Double_Junc_Fluxonium(Device):
                         - np.min(qubit_frequencies)
                     )
             return ratio_values, EL_values, qubit_dispersion, mediator_dispersion, qubit_0_frequencies
+
+    def f01_over_ng(self, ng_vals, phi_e, E_cq, E_ci):
+        f01 = []
+
+        for ng in ng_vals:
+            energies, states = self.eigenstates_symm(
+                E_cq, E_ci, phi_e, N_levels=2, ng=ng
+            )
+            f01.append(energies[1] - energies[0])
+
+        plt.figure(figsize=(7, 4))
+        plt.plot(ng_vals, f01)
+        plt.xlabel(r"$n_g$")
+        plt.ylabel(r"$f_{01}$ (GHz)")
+        plt.xlim(0, 1)
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.show()
     
     def get_h_symm(self, E_Cq, E_Ci, phi_e, ng = 0):
         N_charge = self.N_charge
@@ -787,6 +814,16 @@ class Double_Junc_Fluxonium(Device):
             """Return the resonator pull f_r|1 - f_r|0 and its state shifts."""
             chi0 = 0
             chi1 = 0
+            mediator_state_index = self.identify_mediator_state_index(
+                eigvecs[:, 0],
+                eigvecs,
+                excluded_indices=[0],
+            )
+            qubit_state_index = next(
+                state_index
+                for state_index in range(1, number_states)
+                if state_index != mediator_state_index
+            )
     
             nq_op = self.nq_op
             ni_op = self.ni_op
@@ -798,7 +835,7 @@ class Double_Junc_Fluxonium(Device):
                 )
 
                 chi1 = chi1 + get_chi_ij_two_mode(
-                    1, state_ind, eigvals, eigvecs, nq_op, ni_op,
+                    qubit_state_index, state_ind, eigvals, eigvecs, nq_op, ni_op,
                     gqr, gir, fr, nr_zpf
                 )
             chi = chi1 - chi0
@@ -866,54 +903,50 @@ class Double_Junc_Fluxonium(Device):
             states = states[:, idx]
     
             ground_state = states[:, 0]
+            mediator_operator = kron(
+                self.ni_op, eye(Nr, format="csr"), format="csr"
+            )
+            mediator_state_index = self.identify_mediator_state_index(
+                ground_state,
+                states,
+                mediator_operator=mediator_operator,
+                excluded_indices=[0],
+                min_overlap=0.5,
+            )
 
-            if reference_states is None:
-                # The seed is at pi flux, where the qubit excitation is assumed
-                # to be the first excited state and below the resonator.
-                state_q1_r0_index = 1
-                target_q0_r1 = a_dag_full @ ground_state
-                target_q0_r1_norm = np.linalg.norm(target_q0_r1)
-                if target_q0_r1_norm == 0:
-                    raise RuntimeError("Cannot identify the resonator-like state from the ground state")
-                target_q0_r1 /= target_q0_r1_norm
-                state_q0_r1_index = self.identify_state_index(
-                    [target_q0_r1],
-                    states,
-                    excluded_indices=[0, state_q1_r0_index],
-                    min_overlap=0.5,
-                )[0][0]
+            target_q0_r1 = a_dag_full @ ground_state
+            target_q0_r1_norm = np.linalg.norm(target_q0_r1)
+            if target_q0_r1_norm == 0:
+                raise RuntimeError("Cannot identify the resonator-like state from the ground state")
+            target_q0_r1 /= target_q0_r1_norm
+            state_q0_r1_index = self.identify_state_index(
+                [target_q0_r1],
+                states,
+                excluded_indices=[0, mediator_state_index],
+                min_overlap=0.5,
+            )[0][0]
+            state_q1_r0_index = next(
+                state_index
+                for state_index in range(1, n_eigenstates)
+                if state_index not in {mediator_state_index, state_q0_r1_index}
+            )
 
-                target_q1_r1 = a_dag_full @ states[:, state_q1_r0_index]
-                target_q1_r1_norm = np.linalg.norm(target_q1_r1)
-                if target_q1_r1_norm == 0:
-                    raise RuntimeError("Cannot identify the q1-r1 state from the q1-r0 state")
-                target_q1_r1 /= target_q1_r1_norm
-                state_q1_r1_index = self.identify_state_index(
-                    [target_q1_r1],
-                    states,
-                    excluded_indices=[0, state_q1_r0_index, state_q0_r1_index],
-                    min_overlap=0.5,
-                )[0][0]
-            else:
-                q0_r1_reference, q1_r0_reference, q1_r1_reference = reference_states
-                state_q0_r1_index = self.identify_state_index(
-                    [q0_r1_reference],
-                    states,
-                    excluded_indices=[0],
-                    min_overlap=0.5,
-                )[0][0]
-                state_q1_r0_index = self.identify_state_index(
-                    [q1_r0_reference],
-                    states,
-                    excluded_indices=[0, state_q0_r1_index],
-                    min_overlap=0.5,
-                )[0][0]
-                state_q1_r1_index = self.identify_state_index(
-                    [q1_r1_reference],
-                    states,
-                    excluded_indices=[0, state_q0_r1_index, state_q1_r0_index],
-                    min_overlap=0.5,
-                )[0][0]
+            target_q1_r1 = a_dag_full @ states[:, state_q1_r0_index]
+            target_q1_r1_norm = np.linalg.norm(target_q1_r1)
+            if target_q1_r1_norm == 0:
+                raise RuntimeError("Cannot identify the q1-r1 state from the q1-r0 state")
+            target_q1_r1 /= target_q1_r1_norm
+            state_q1_r1_index = self.identify_state_index(
+                [target_q1_r1],
+                states,
+                excluded_indices=[
+                    0,
+                    mediator_state_index,
+                    state_q1_r0_index,
+                    state_q0_r1_index,
+                ],
+                min_overlap=0.5,
+            )[0][0]
 
             f_01 = energies[state_q1_r0_index] - energies[0]
             fr0 = energies[state_q0_r1_index] - energies[0]
@@ -934,9 +967,9 @@ class Double_Junc_Fluxonium(Device):
             return result
     
     def find_chi_full_over_flux(
-        self, res_ind, phi_es, n_eigenstates=43, return_spectrum=False
+        self, res_ind, phi_es, qubit_phi_e=np.pi, n_eigenstates=43, return_spectrum=False
     ):
-            """Sweep chi, seeding state labels near pi and tracking by overlap."""
+            """Sweep chi, leaving flux points with ambiguous states unplotted."""
             if not hasattr(self, "res_couplings"):
                 raise RuntimeError("Call add_resonator_coupling first")
             chis = []
@@ -950,68 +983,62 @@ class Double_Junc_Fluxonium(Device):
             phi_es = np.asarray(phi_es, dtype=float)
             if phi_es.ndim != 1 or phi_es.size == 0:
                 raise ValueError("phi_es must be a non-empty one-dimensional array")
-            # Sort fluxes so each state is matched to its nearest grid neighbor.
             sorted_indices = np.argsort(phi_es)
             sorted_phi_es = phi_es[sorted_indices]
             if np.any(np.diff(sorted_phi_es) <= 0):
                 raise ValueError("phi_es values must be unique")
 
-            # Anchor state labels at the sampled flux closest to pi.
-            seed_flux_index = int(np.argmin(np.abs(sorted_phi_es - np.pi)))
             results = [None] * phi_es.size
-            seed_result = self.find_chi_full(
-                res_ind,
-                sorted_phi_es[seed_flux_index],
-                return_tracking_states=True,
-                return_spectrum=return_spectrum,
-                n_eigenstates=n_eigenstates,
-            )
-            results[sorted_indices[seed_flux_index]] = (
-                seed_result[:4] + ((seed_result[5],) if return_spectrum else ())
-            )
-            seed_tracking_states = seed_result[4]
-
-            # Track outward on each side, passing each match to the next point.
-            for flux_index_step in (-1, 1):
-                previous_flux_tracking_states = seed_tracking_states
-                flux_index = seed_flux_index + flux_index_step
-                while 0 <= flux_index < sorted_phi_es.size:
+            for flux_index, phi_ext in enumerate(sorted_phi_es):
+                try:
                     result = self.find_chi_full(
                         res_ind,
-                        sorted_phi_es[flux_index],
-                        reference_states=previous_flux_tracking_states,
-                        return_tracking_states=True,
+                        phi_ext,
                         return_spectrum=return_spectrum,
                         n_eigenstates=n_eigenstates,
                     )
                     results[sorted_indices[flux_index]] = (
-                        result[:4] + ((result[5],) if return_spectrum else ())
+                        result[:4] + ((result[4],) if return_spectrum else ())
                     )
-                    previous_flux_tracking_states = result[4]
-                    flux_index += flux_index_step
+                except (RuntimeError, ValueError) as error:
+                    warnings.warn(
+                        f"Skipping phi_e={phi_ext}: {error}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
 
             spectra = []
             for result in results:
+                if result is None:
+                    chis.append(np.nan)
+                    chi0s.append(np.nan)
+                    chi1s.append(np.nan)
+                    fqs.append(np.nan)
+                    if return_spectrum:
+                        spectra.append(np.full(n_eigenstates, np.nan))
+                    continue
                 chi, fr0, fr1, fq = result[:4]
                 chis.append(chi)
-                chi0s.append((fr0-fr_eff_bare)*10**3)
-                chi1s.append((fr1-fr_eff_bare)*10**3)
+                chi0s.append((fr0 - fr_eff_bare) * 10**3)
+                chi1s.append((fr1 - fr_eff_bare) * 10**3)
                 fqs.append(fq)
-            if return_spectrum:
-                for result in results:
+                if return_spectrum:
                     spectra.append(result[4])
+            if return_spectrum:
+                spectra = np.asarray(spectra)
 
             sweep_results = (chis, chi0s, chi1s, fqs)
             if return_spectrum:
                 return (*sweep_results, np.asarray(spectra))
             return sweep_results
 
-    def plot_spectrum_full_over_flux(self, res_ind, phi_es, n_eigenstates=43):
+    def plot_spectrum_full_over_flux(self, res_ind, phi_es, qubit_phi_e=np.pi, n_eigenstates=43):
         """Plot the coupled spectrum and overlap-tracked resonator/qubit states."""
         phi_es = np.asarray(phi_es, dtype=float)
         _, chi0s, chi1s, fqs, spectra = self.find_chi_full_over_flux(
             res_ind,
             phi_es,
+            qubit_phi_e=qubit_phi_e,
             n_eigenstates=n_eigenstates,
             return_spectrum=True,
         )
@@ -1196,6 +1223,31 @@ class Double_Junc_Fluxonium(Device):
             )
             coupling = sum(self.res_couplings[res_ind])
             return h_uncoupled + coupling
+
+    def identify_mediator_state_index(
+        self,
+        ground_state,
+        eigenstates,
+        mediator_operator=None,
+        excluded_indices=None,
+        min_overlap=None,
+    ):
+        """Identify the eigenstate with the strongest internal-mode excitation."""
+        if mediator_operator is None:
+            mediator_operator = self.ni_op
+        mediator_target = mediator_operator @ ground_state
+        target_norm = np.linalg.norm(mediator_target)
+        if target_norm == 0:
+            raise RuntimeError(
+                "Cannot identify the mediator-like state from the ground state"
+            )
+        mediator_target /= target_norm
+        return self.identify_state_index(
+            [mediator_target],
+            eigenstates,
+            excluded_indices=excluded_indices,
+            min_overlap=min_overlap,
+        )[0][0]
 
     def identify_state_index(
         self, states_to_identify, eigenstates, excluded_indices=None, min_overlap=None
