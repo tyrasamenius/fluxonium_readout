@@ -14,7 +14,8 @@
   EJ first and EC second, matching its nested parameter loops.
   The symmetric double-junction wavefunction plots now default to showing the
   internal mode in phase basis and accept `plot_in_phase_basis=False` for the
-  charge-basis view.
+  charge-basis view. The internal phase-basis plots cover
+  `-2*pi <= phi_i < 2*pi`.
 
 ## 2026-11-13
 

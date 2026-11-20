@@ -1150,6 +1150,7 @@ class Double_Junc_Fluxonium(Device):
         phi_e,
         ng=0,
         plot_in_phase_basis=True,
+        internal_phase_vals = np.linspace(-np.pi, np.pi, 84, endpoint=False),
     ):
         return self._plot_wavefuncs_symm(
             E_Cq,
@@ -1159,6 +1160,7 @@ class Double_Junc_Fluxonium(Device):
             plot_probability=True,
             ng=ng,
             plot_in_phase_basis=plot_in_phase_basis,
+            internal_phase_vals = internal_phase_vals,
         )
 
     def plot_wavefuncs_real_symm(
@@ -1169,6 +1171,7 @@ class Double_Junc_Fluxonium(Device):
         phi_e,
         ng=0,
         plot_in_phase_basis=True,
+        internal_phase_vals = np.linspace(-np.pi, np.pi, 84, endpoint=False),
     ):
         return self._plot_wavefuncs_symm(
             E_Cq,
@@ -1178,6 +1181,7 @@ class Double_Junc_Fluxonium(Device):
             plot_probability=False,
             ng=ng,
             plot_in_phase_basis=plot_in_phase_basis,
+            internal_phase_vals = internal_phase_vals
         )
 
     def _plot_wavefuncs_symm(
@@ -1189,6 +1193,7 @@ class Double_Junc_Fluxonium(Device):
         plot_probability,
         ng=0,
         plot_in_phase_basis=True,
+        internal_phase_vals = np.linspace(-np.pi, np.pi, 84, endpoint=False)
     ):
         vals, vecs = self.eigenstates_symm(E_Cq, E_Ci, phi_e, N_levels=nbr_wavfuncs, ng = ng)
 
@@ -1201,7 +1206,6 @@ class Double_Junc_Fluxonium(Device):
 
         if plot_in_phase_basis:
             n_vals = np.arange(-N_charge//2 + 1, N_charge//2 + 1)
-            internal_phase_vals = np.linspace(-np.pi, np.pi, N_charge, endpoint=False)
             charge_to_phase = np.exp(
                 1j * np.outer(n_vals, internal_phase_vals)
             ).T / np.sqrt(N_charge)
